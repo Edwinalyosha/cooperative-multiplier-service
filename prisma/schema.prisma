@@ -1,0 +1,42 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model DirectorMultiplier {
+  id                                 Int      @id @default(autoincrement())
+  clientId                           Int      @unique
+  currentMultiplier                  Decimal  @db.Decimal(10,3)
+  loanMultiple                       Decimal  @db.Decimal(10,3)
+  contributionScore                  Int?
+  repaymentScore                     Int?
+  consecutiveOnTimeContributions     Int?     @default(0)
+  consecutiveOnTimeRepayments        Int?     @default(0)
+  lastContributionStatus             String?
+  lastRepaymentStatus                String?
+  contributionBalance                Decimal? @db.Decimal(14, 2)
+  maxLoanAmount                      Decimal? @db.Decimal(14, 2)
+  isEligible                         Boolean? @default(false)
+  eligibilityCheckedAt               DateTime?
+  createdAt                          DateTime @default(now())
+  updatedAt                          DateTime @updatedAt
+  history                            MultiplierHistory[]
+}
+
+model MultiplierHistory {
+  id              Int      @id @default(autoincrement())
+  clientId        Int
+  eventType       String
+  oldMultiplier   Decimal? @db.Decimal(10,3)
+  newMultiplier   Decimal? @db.Decimal(10,3)
+  stepAmount      Decimal? @db.Decimal(10,3)
+  direction       String?
+  triggeredBy     String?
+  notes           String?
+  createdAt       DateTime @default(now())
+  director        DirectorMultiplier @relation(fields: [clientId], references: [clientId])
+}
