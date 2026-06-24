@@ -116,3 +116,88 @@ describe('MobileAuthService — loginMobile()', () => {
     ).rejects.toThrow(ServiceUnavailableException);
   });
 });
+
+describe('MobileAuthService — refreshTokens()', () => {
+  let service: MobileAuthService;
+
+  beforeEach(async () => {
+    jest.clearAllMocks();
+    const module: TestingModule = await Test.createTestingModule({
+      providers: [
+        MobileAuthService,
+        { provide: 'MOBILE_AUTH_REDIS', useValue: mockRedis },
+        { provide: HttpService, useValue: mockHttp },
+        { provide: ConfigService, useValue: mockConfig },
+        { provide: JwtService, useValue: mockJwt },
+      ],
+    }).compile();
+    service = module.get<MobileAuthService>(MobileAuthService);
+  });
+
+  it('returns new token pair when refresh token is valid', async () => {
+    const storedData = JSON.stringify({
+      userId: 42, username: 'john.doe', displayName: 'John Doe', officeId: 1,
+    });
+    mockRedis.get.mockResolvedValue(storedData);
+    mockRedis.del.mockResolvedValue(1);
+    mockRedis.set.mockResolvedValue('OK');
+
+    const result = await service.refreshTokens('valid-uuid');
+
+    expect(result.accessToken).toBe('mock.jwt.token');
+    expect(result.refreshToken).not.toBe('valid-uuid'); // rotated
+  });
+
+  it('deletes old Redis key on refresh (token rotation)', async () => {
+    const storedData = JSON.stringify({
+      userId: 42, username: 'john.doe', displayName: 'John Doe', officeId: 1,
+    });
+    mockRedis.get.mockResolvedValue(storedData);
+    mockRedis.del.mockResolvedValue(1);
+    mockRedis.set.mockResolvedValue('OK');
+
+    await service.refreshTokens('old-token-uuid');
+
+    expect(mockRedis.del).toHaveBeenCalledWith('mobile_refresh:old-token-uuid');
+  });
+
+  it('throws UnauthorizedException when refresh token not in Redis', async () => {
+    mockRedis.get.mockResolvedValue(null);
+
+    await expect(service.refreshTokens('expired-uuid')).rejects.toThrow(
+      UnauthorizedException,
+    );
+  });
+});
+
+describe('MobileAuthService — logout()', () => {
+  let service: MobileAuthService;
+
+  beforeEach(async () => {
+    jest.clearAllMocks();
+    const module: TestingModule = await Test.createTestingModule({
+      providers: [
+        MobileAuthService,
+        { provide: 'MOBILE_AUTH_REDIS', useValue: mockRedis },
+        { provide: HttpService, useValue: mockHttp },
+        { provide: ConfigService, useValue: mockConfig },
+        { provide: JwtService, useValue: mockJwt },
+      ],
+    }).compile();
+    service = module.get<MobileAuthService>(MobileAuthService);
+  });
+
+  it('deletes the refresh token key from Redis', async () => {
+    mockRedis.del.mockResolvedValue(1);
+
+    await service.logout('some-refresh-uuid');
+
+    expect(mockRedis.del).toHaveBeenCalledWith('mobile_refresh:some-refresh-uuid');
+  });
+
+  it('resolves without error even if key does not exist', async () => {
+    mockRedis.del.mockResolvedValue(0); // 0 = key not found, still succeeds
+
+    await expect(service.logout('nonexistent-uuid')).resolves.toBeUndefined();
+  });
+});
