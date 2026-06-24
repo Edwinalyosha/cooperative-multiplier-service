@@ -25,7 +25,7 @@ export class MobileJwtStrategy extends PassportStrategy(
         config.get<string>('jwt.accessSecret') ??
         'dev-jwt-secret-change-in-prod',
       clockTolerance: 30,
-    });
+    } as unknown as ConstructorParameters<typeof Strategy>[0]);
   }
 
   validate(payload: MobileJwtPayload): MobileJwtPayload {

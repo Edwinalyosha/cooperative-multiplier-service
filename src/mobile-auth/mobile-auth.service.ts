@@ -4,7 +4,7 @@ import {
   UnauthorizedException,
   ServiceUnavailableException,
 } from '@nestjs/common';
-import { JwtService } from '@nestjs/jwt';
+import { JwtService, JwtSignOptions } from '@nestjs/jwt';
 import { ConfigService } from '@nestjs/config';
 import { HttpService } from '@nestjs/axios';
 import { firstValueFrom } from 'rxjs';
@@ -115,7 +115,7 @@ export class MobileAuthService {
 
     const accessToken = this.jwtService.sign(payload, {
       secret,
-      expiresIn,
+      expiresIn: expiresIn as JwtSignOptions['expiresIn'],
     });
 
     const refreshToken = uuidv4();
