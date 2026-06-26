@@ -48,11 +48,11 @@ export default function RootLayout() {
     if (isLoading || !onboardingChecked) return;
 
     if (isAuthenticated) {
-      router.replace('/(app)');
+      router.replace('/(app)/home');
     } else if (onboardingSeen) {
       router.replace('/(auth)/login');
     } else {
-      router.replace('/(onboarding)/index');
+      router.replace('/(onboarding)/welcome');
     }
   }, [isLoading, isAuthenticated, onboardingChecked, onboardingSeen]);
 
@@ -74,12 +74,19 @@ export default function RootLayout() {
     router.replace('/(auth)/login');
   };
 
+  const showBootstrapSpinner = isLoading || !onboardingChecked;
+
   return (
     <>
-      {isLoading || !onboardingChecked ? (
+      <Slot />
+      {showBootstrapSpinner && (
         <View
           style={{
-            flex: 1,
+            position: 'absolute',
+            top: 0,
+            right: 0,
+            bottom: 0,
+            left: 0,
             justifyContent: 'center',
             alignItems: 'center',
             backgroundColor: '#0F766E',
@@ -87,8 +94,6 @@ export default function RootLayout() {
         >
           <ActivityIndicator size="large" color="#ffffff" />
         </View>
-      ) : (
-        <Slot />
       )}
       <SessionExpiredModal
         visible={sessionExpired}
