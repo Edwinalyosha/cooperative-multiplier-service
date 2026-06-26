@@ -1,39 +1,54 @@
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
+import { View, ActivityIndicator } from 'react-native';
 import { router, Slot, SplashScreen } from 'expo-router';
 import { AppState, AppStateStatus } from 'react-native';
+import * as SecureStore from 'expo-secure-store';
 import { useAuthStore } from '@/features/auth/store/auth.store';
 import { SessionExpiredModal } from '@/features/auth/components/session-expired-modal';
 import '@/global.css';
 
 SplashScreen.preventAutoHideAsync();
 
+const ONBOARDING_KEY = 'onboarding_complete';
+
 export default function RootLayout() {
   const {
     isLoading,
     isAuthenticated,
     sessionExpired,
-    markSessionExpired: _markSessionExpired,
     initialize,
     logout,
     accessToken,
   } = useAuthStore();
 
-  // Bootstrap on cold start
+  const [onboardingChecked, setOnboardingChecked] = useState(false);
+  const [onboardingSeen, setOnboardingSeen] = useState(false);
+
+  // Bootstrap: run auth init + read onboarding flag in parallel
   useEffect(() => {
-    initialize().then(() => {
+    Promise.all([
+      initialize(),
+      SecureStore.getItemAsync(ONBOARDING_KEY).then((val) => {
+        setOnboardingSeen(val === '1');
+        setOnboardingChecked(true);
+      }),
+    ]).then(() => {
       SplashScreen.hideAsync();
     });
   }, [initialize]);
 
-  // Handle auth routing once loading is resolved
+  // Route once both checks are resolved
   useEffect(() => {
-    if (isLoading) return;
+    if (isLoading || !onboardingChecked) return;
+
     if (isAuthenticated) {
-      router.replace('/(app)/');
-    } else {
+      router.replace('/(app)');
+    } else if (onboardingSeen) {
       router.replace('/(auth)/login');
+    } else {
+      router.replace('/(onboarding)/index');
     }
-  }, [isLoading, isAuthenticated]);
+  }, [isLoading, isAuthenticated, onboardingChecked, onboardingSeen]);
 
   // Re-check token validity when app returns to foreground
   useEffect(() => {
@@ -41,7 +56,6 @@ export default function RootLayout() {
       'change',
       async (nextState: AppStateStatus) => {
         if (nextState === 'active' && accessToken) {
-          // Re-run initialize to check if token has since expired
           await initialize();
         }
       },
@@ -56,7 +70,20 @@ export default function RootLayout() {
 
   return (
     <>
-      <Slot />
+      {isLoading || !onboardingChecked ? (
+        <View
+          style={{
+            flex: 1,
+            justifyContent: 'center',
+            alignItems: 'center',
+            backgroundColor: '#0F766E',
+          }}
+        >
+          <ActivityIndicator size="large" color="#ffffff" />
+        </View>
+      ) : (
+        <Slot />
+      )}
       <SessionExpiredModal
         visible={sessionExpired}
         onSignInAgain={handleSignInAgain}
