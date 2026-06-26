@@ -5,7 +5,7 @@ import {
   waitFor,
   cleanup,
 } from '@testing-library/react-native';
-import { LoginScreen } from './login.screen';
+import { LoginScreen } from '../screens/login.screen';
 import { useAuthStore } from '../store/auth.store';
 
 jest.mock('../store/auth.store');
@@ -87,13 +87,13 @@ describe('LoginScreen', () => {
     mockLogin.mockResolvedValue(undefined);
     const { getByPlaceholderText, getByText } = await render(<LoginScreen />);
 
-    fireEvent.changeText(getByPlaceholderText('Username'), 'john.doe');
+    fireEvent.changeText(getByPlaceholderText('Username'), 'john_doe');
     fireEvent.changeText(getByPlaceholderText('Password'), 'secret');
     fireEvent.press(getByText('Sign In'));
 
     await waitFor(() => {
       expect(mockLogin).toHaveBeenCalledWith({
-        username: 'john.doe',
+        username: 'john_doe',
         password: 'secret',
       });
     });
