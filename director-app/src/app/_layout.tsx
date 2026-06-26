@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { View, ActivityIndicator } from 'react-native';
 import { router, Slot, SplashScreen } from 'expo-router';
 import { AppState, AppStateStatus } from 'react-native';
@@ -12,7 +12,7 @@ SplashScreen.preventAutoHideAsync();
 
 export default function RootLayout() {
   const {
-    isLoading,
+    isInitializing,
     isAuthenticated,
     sessionExpired,
     initialize,
@@ -22,6 +22,7 @@ export default function RootLayout() {
 
   const [onboardingChecked, setOnboardingChecked] = useState(false);
   const [onboardingSeen, setOnboardingSeen] = useState(false);
+  const hasInitialRouted = useRef(false);
 
   // Bootstrap: run auth init + read onboarding flag in parallel
   useEffect(() => {
@@ -43,9 +44,11 @@ export default function RootLayout() {
     });
   }, [initialize]);
 
-  // Route once both checks are resolved
+  // Initial route once after bootstrap — do not re-run on login failure
   useEffect(() => {
-    if (isLoading || !onboardingChecked) return;
+    if (isInitializing || !onboardingChecked) return;
+    if (hasInitialRouted.current) return;
+    hasInitialRouted.current = true;
 
     if (isAuthenticated) {
       router.replace('/(app)/home');
@@ -54,7 +57,15 @@ export default function RootLayout() {
     } else {
       router.replace('/(onboarding)/welcome');
     }
-  }, [isLoading, isAuthenticated, onboardingChecked, onboardingSeen]);
+  }, [isInitializing, isAuthenticated, onboardingChecked, onboardingSeen]);
+
+  // Navigate to home after successful login
+  useEffect(() => {
+    if (!hasInitialRouted.current || isInitializing) return;
+    if (isAuthenticated) {
+      router.replace('/(app)/home');
+    }
+  }, [isAuthenticated, isInitializing]);
 
   // Re-check token validity when app returns to foreground
   useEffect(() => {
@@ -74,7 +85,7 @@ export default function RootLayout() {
     router.replace('/(auth)/login');
   };
 
-  const showBootstrapSpinner = isLoading || !onboardingChecked;
+  const showBootstrapSpinner = isInitializing || !onboardingChecked;
 
   return (
     <>

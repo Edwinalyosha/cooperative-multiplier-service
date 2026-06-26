@@ -1,9 +1,11 @@
 import axios, { AxiosInstance, InternalAxiosRequestConfig, AxiosError } from 'axios';
+import { authClient } from './auth.client';
+import { API_BASE_URL } from './api.config';
 import { useAuthStore } from '../store/auth.store';
 import { TokenPair } from '../types/auth.types';
 
 export const axiosInstance: AxiosInstance = axios.create({
-  baseURL: 'https://api.sagehive.cloud',
+  baseURL: API_BASE_URL,
   timeout: 15000,
 });
 
@@ -70,7 +72,7 @@ axiosInstance.interceptors.response.use(
       useAuthStore.getState();
 
     try {
-      const { data: newPair } = await axiosInstance.post<TokenPair>(
+      const { data: newPair } = await authClient.post<TokenPair>(
         '/mobile/v1/auth/refresh',
         { refreshToken },
       );

@@ -1,5 +1,6 @@
 import MockAdapter from 'axios-mock-adapter';
 import { axiosInstance } from './axios.instance';
+import { authClient } from './auth.client';
 import { useAuthStore } from '../store/auth.store';
 
 jest.mock('../store/auth.store', () => ({
@@ -11,6 +12,7 @@ jest.mock('../store/auth.store', () => ({
 
 const mockStore = useAuthStore as jest.Mocked<typeof useAuthStore>;
 const mock = new MockAdapter(axiosInstance);
+const authMock = new MockAdapter(authClient);
 
 const mockTokenPair = {
   accessToken: 'new.jwt.token',
@@ -22,11 +24,13 @@ const mockTokenPair = {
 describe('axiosInstance interceptors', () => {
   beforeEach(() => {
     mock.reset();
+    authMock.reset();
     jest.clearAllMocks();
   });
 
   afterAll(() => {
     mock.restore();
+    authMock.restore();
   });
 
   it('attaches Authorization header when accessToken is in store', async () => {
@@ -62,7 +66,7 @@ describe('axiosInstance interceptors', () => {
 
     // First call returns 401, refresh succeeds, retry returns 200
     mock.onGet('/protected').replyOnce(401);
-    mock.onPost('/mobile/v1/auth/refresh').replyOnce(200, mockTokenPair);
+    authMock.onPost('/mobile/v1/auth/refresh').replyOnce(200, mockTokenPair);
     mock.onGet('/protected').replyOnce(200, { data: 'ok' });
 
     const response = await axiosInstance.get('/protected');
@@ -81,7 +85,7 @@ describe('axiosInstance interceptors', () => {
     } as any);
 
     mock.onGet('/protected').replyOnce(401);
-    mock.onPost('/mobile/v1/auth/refresh').replyOnce(401);
+    authMock.onPost('/mobile/v1/auth/refresh').replyOnce(401);
 
     await expect(axiosInstance.get('/protected')).rejects.toBeDefined();
     expect(markSessionExpiredMock).toHaveBeenCalled();

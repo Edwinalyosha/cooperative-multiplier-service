@@ -18,6 +18,7 @@ interface AuthState {
   accessToken: string | null;
   refreshToken: string | null;
   isAuthenticated: boolean;
+  isInitializing: boolean;
   isLoading: boolean;
   sessionExpired: boolean;
   error: string | null;
@@ -34,12 +35,13 @@ export const useAuthStore = create<AuthState>((set, get) => ({
   accessToken: null,
   refreshToken: null,
   isAuthenticated: false,
+  isInitializing: false,
   isLoading: false,
   sessionExpired: false,
   error: null,
 
   initialize: async () => {
-    set({ isLoading: true });
+    set({ isInitializing: true });
     try {
       const [storedAccess, storedRefresh, storedUser] = await Promise.all([
         SecureStore.getItemAsync(STORAGE_KEYS.ACCESS_TOKEN),
@@ -48,7 +50,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
       ]);
 
       if (!storedAccess && !storedRefresh) {
-        set({ isLoading: false, isAuthenticated: false });
+        set({ isInitializing: false, isAuthenticated: false });
         return;
       }
 
@@ -72,7 +74,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
               refreshToken: storedRefresh,
               user,
               isAuthenticated: true,
-              isLoading: false,
+              isInitializing: false,
             });
             return;
           }
@@ -95,7 +97,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
             refreshToken: newPair.refreshToken,
             user: newPair.user,
             isAuthenticated: true,
-            isLoading: false,
+            isInitializing: false,
           });
           return;
         } catch {
@@ -108,9 +110,9 @@ export const useAuthStore = create<AuthState>((set, get) => ({
         }
       }
 
-      set({ isLoading: false, isAuthenticated: false });
+      set({ isInitializing: false, isAuthenticated: false });
     } catch {
-      set({ isLoading: false, isAuthenticated: false });
+      set({ isInitializing: false, isAuthenticated: false });
     }
   },
 
@@ -143,15 +145,15 @@ export const useAuthStore = create<AuthState>((set, get) => ({
             : 'UNKNOWN_ERROR';
 
       const messages: Record<string, string> = {
-        INVALID_CREDENTIALS: 'Invalid username or password',
+        INVALID_CREDENTIALS: 'Invalid credentials',
         FINERACT_UNAVAILABLE: 'Service temporarily unavailable. Try again shortly.',
-        'Invalid credentials': 'Invalid username or password',
+        'Invalid credentials': 'Invalid credentials',
       };
 
       let errorMessage = messages[code];
       if (!errorMessage) {
         if (response?.status === 401) {
-          errorMessage = 'Invalid username or password';
+          errorMessage = 'Invalid credentials';
         } else if (!response) {
           errorMessage = 'No connection. Check your network.';
         } else {

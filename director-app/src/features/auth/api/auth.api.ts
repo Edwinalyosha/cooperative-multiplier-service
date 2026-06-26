@@ -1,9 +1,9 @@
-import { axiosInstance } from './axios.instance';
+import { authClient } from './auth.client';
 import { LoginCredentials, TokenPair } from '../types/auth.types';
 
 export const authApi = {
   login: async (credentials: LoginCredentials): Promise<TokenPair> => {
-    const { data } = await axiosInstance.post<TokenPair>(
+    const { data } = await authClient.post<TokenPair>(
       '/mobile/v1/auth/login',
       credentials,
     );
@@ -11,7 +11,7 @@ export const authApi = {
   },
 
   refresh: async (refreshToken: string): Promise<TokenPair> => {
-    const { data } = await axiosInstance.post<TokenPair>(
+    const { data } = await authClient.post<TokenPair>(
       '/mobile/v1/auth/refresh',
       { refreshToken },
     );
@@ -19,6 +19,6 @@ export const authApi = {
   },
 
   logout: async (refreshToken: string): Promise<void> => {
-    await axiosInstance.post('/mobile/v1/auth/logout', { refreshToken });
+    await authClient.post('/mobile/v1/auth/logout', { refreshToken });
   },
 };

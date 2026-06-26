@@ -45,10 +45,12 @@ export function LoginScreen() {
       colors={['#0F766E', '#0F172A']}
       start={{ x: 0, y: 0 }}
       end={{ x: 0.3, y: 1 }}
+      style={{ flex: 1 }}
       className="flex-1"
     >
       <KeyboardAvoidingView
         behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+        style={{ flex: 1 }}
         className="flex-1"
       >
         <ScrollView

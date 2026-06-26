@@ -8,7 +8,7 @@ import { JwtService, JwtSignOptions } from '@nestjs/jwt';
 import { ConfigService } from '@nestjs/config';
 import { HttpService } from '@nestjs/axios';
 import { firstValueFrom } from 'rxjs';
-import { v4 as uuidv4 } from 'uuid';
+import { randomUUID } from 'crypto';
 import type { Redis } from 'ioredis';
 import { MobileLoginDto } from './dto/mobile-login.dto';
 import { TokenResponseDto, FineractUserDto } from './dto/token-response.dto';
@@ -71,7 +71,7 @@ export class MobileAuthService {
     try {
       const response = await firstValueFrom(
         this.http.post(
-          `${baseUrl}/fineract-provider/api/v1/authentication`,
+          `${baseUrl}/authentication`,
           { username, password },
           {
             headers: {
@@ -118,7 +118,7 @@ export class MobileAuthService {
       expiresIn: expiresIn as JwtSignOptions['expiresIn'],
     });
 
-    const refreshToken = uuidv4();
+    const refreshToken = randomUUID();
 
     const storedData: StoredRefreshData = {
       userId: user.id,

@@ -21,6 +21,7 @@ describe('useAuthStore', () => {
       accessToken: null,
       refreshToken: null,
       isAuthenticated: false,
+      isInitializing: false,
       isLoading: false,
       sessionExpired: false,
       error: null,
@@ -32,6 +33,7 @@ describe('useAuthStore', () => {
     const state = useAuthStore.getState();
     expect(state.isAuthenticated).toBe(false);
     expect(state.isLoading).toBe(false);
+    expect(state.isInitializing).toBe(false);
     expect(state.user).toBeNull();
     expect(state.accessToken).toBeNull();
     expect(state.sessionExpired).toBe(false);
@@ -90,5 +92,6 @@ describe('useAuthStore', () => {
     const state = useAuthStore.getState();
     expect(state.isAuthenticated).toBe(false);
     expect(state.isLoading).toBe(false);
+    expect(state.isInitializing).toBe(false);
   });
 });
