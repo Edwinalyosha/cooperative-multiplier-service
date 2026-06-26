@@ -30,6 +30,8 @@ interface PageConfig {
   dark: boolean;
 }
 
+const viewabilityConfig = { viewAreaCoveragePercentThreshold: 50 };
+
 const PAGES: PageConfig[] = [
   {
     id: 'security',
@@ -193,8 +195,6 @@ export function OnboardingScreen() {
     },
     [],
   );
-
-  const viewabilityConfig = { viewAreaCoveragePercentThreshold: 50 };
 
   const renderItem = useCallback(
     ({ item, index }: ListRenderItemInfo<PageConfig>) => {
