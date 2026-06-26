@@ -3,12 +3,7 @@ import * as SecureStore from 'expo-secure-store';
 import { jwtDecode } from 'jwt-decode';
 import { FineractUser, TokenPair } from '../types/auth.types';
 import { authApi } from '../api/auth.api';
-
-const KEYS = {
-  ACCESS_TOKEN: 'auth_access_token',
-  REFRESH_TOKEN: 'auth_refresh_token',
-  USER: 'auth_user',
-} as const;
+import { STORAGE_KEYS } from '@/constants/storage-keys';
 
 interface MobileJwtPayload {
   sub: number;
@@ -47,9 +42,9 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     set({ isLoading: true });
     try {
       const [storedAccess, storedRefresh, storedUser] = await Promise.all([
-        SecureStore.getItemAsync(KEYS.ACCESS_TOKEN),
-        SecureStore.getItemAsync(KEYS.REFRESH_TOKEN),
-        SecureStore.getItemAsync(KEYS.USER),
+        SecureStore.getItemAsync(STORAGE_KEYS.ACCESS_TOKEN),
+        SecureStore.getItemAsync(STORAGE_KEYS.REFRESH_TOKEN),
+        SecureStore.getItemAsync(STORAGE_KEYS.USER),
       ]);
 
       if (!storedAccess && !storedRefresh) {
@@ -91,9 +86,9 @@ export const useAuthStore = create<AuthState>((set, get) => ({
         try {
           const newPair = await authApi.refresh(storedRefresh);
           await Promise.all([
-            SecureStore.setItemAsync(KEYS.ACCESS_TOKEN, newPair.accessToken),
-            SecureStore.setItemAsync(KEYS.REFRESH_TOKEN, newPair.refreshToken),
-            SecureStore.setItemAsync(KEYS.USER, JSON.stringify(newPair.user)),
+            SecureStore.setItemAsync(STORAGE_KEYS.ACCESS_TOKEN, newPair.accessToken),
+            SecureStore.setItemAsync(STORAGE_KEYS.REFRESH_TOKEN, newPair.refreshToken),
+            SecureStore.setItemAsync(STORAGE_KEYS.USER, JSON.stringify(newPair.user)),
           ]);
           set({
             accessToken: newPair.accessToken,
@@ -106,9 +101,9 @@ export const useAuthStore = create<AuthState>((set, get) => ({
         } catch {
           // Silent refresh failed — not authenticated
           await Promise.all([
-            SecureStore.deleteItemAsync(KEYS.ACCESS_TOKEN),
-            SecureStore.deleteItemAsync(KEYS.REFRESH_TOKEN),
-            SecureStore.deleteItemAsync(KEYS.USER),
+            SecureStore.deleteItemAsync(STORAGE_KEYS.ACCESS_TOKEN),
+            SecureStore.deleteItemAsync(STORAGE_KEYS.REFRESH_TOKEN),
+            SecureStore.deleteItemAsync(STORAGE_KEYS.USER),
           ]);
         }
       }
@@ -124,9 +119,9 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     try {
       const pair = await authApi.login(credentials);
       await Promise.all([
-        SecureStore.setItemAsync(KEYS.ACCESS_TOKEN, pair.accessToken),
-        SecureStore.setItemAsync(KEYS.REFRESH_TOKEN, pair.refreshToken),
-        SecureStore.setItemAsync(KEYS.USER, JSON.stringify(pair.user)),
+        SecureStore.setItemAsync(STORAGE_KEYS.ACCESS_TOKEN, pair.accessToken),
+        SecureStore.setItemAsync(STORAGE_KEYS.REFRESH_TOKEN, pair.refreshToken),
+        SecureStore.setItemAsync(STORAGE_KEYS.USER, JSON.stringify(pair.user)),
       ]);
       set({
         accessToken: pair.accessToken,
@@ -137,16 +132,34 @@ export const useAuthStore = create<AuthState>((set, get) => ({
         error: null,
       });
     } catch (err: unknown) {
-      const code = (err as any)?.response?.data?.message ?? 'UNKNOWN_ERROR';
+      const response = (err as { response?: { status?: number; data?: { message?: string | string[] } } })
+        ?.response;
+      const rawMessage = response?.data?.message;
+      const code =
+        typeof rawMessage === 'string'
+          ? rawMessage
+          : Array.isArray(rawMessage)
+            ? rawMessage.join(', ')
+            : 'UNKNOWN_ERROR';
+
       const messages: Record<string, string> = {
         INVALID_CREDENTIALS: 'Invalid username or password',
         FINERACT_UNAVAILABLE: 'Service temporarily unavailable. Try again shortly.',
+        'Invalid credentials': 'Invalid username or password',
       };
-      set({
-        isLoading: false,
-        error: messages[code] ?? 'No connection. Check your network.',
-      });
-      throw err;
+
+      let errorMessage = messages[code];
+      if (!errorMessage) {
+        if (response?.status === 401) {
+          errorMessage = 'Invalid username or password';
+        } else if (!response) {
+          errorMessage = 'No connection. Check your network.';
+        } else {
+          errorMessage = 'Login failed. Please try again.';
+        }
+      }
+
+      set({ isLoading: false, error: errorMessage });
     }
   },
 
@@ -162,9 +175,9 @@ export const useAuthStore = create<AuthState>((set, get) => ({
       error: null,
     });
     await Promise.all([
-      SecureStore.deleteItemAsync(KEYS.ACCESS_TOKEN),
-      SecureStore.deleteItemAsync(KEYS.REFRESH_TOKEN),
-      SecureStore.deleteItemAsync(KEYS.USER),
+      SecureStore.deleteItemAsync(STORAGE_KEYS.ACCESS_TOKEN),
+      SecureStore.deleteItemAsync(STORAGE_KEYS.REFRESH_TOKEN),
+      SecureStore.deleteItemAsync(STORAGE_KEYS.USER),
     ]);
     if (refreshToken) {
       authApi.logout(refreshToken).catch(() => {
@@ -182,9 +195,9 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     });
     // Persist to SecureStore (fire-and-forget)
     Promise.all([
-      SecureStore.setItemAsync(KEYS.ACCESS_TOKEN, pair.accessToken),
-      SecureStore.setItemAsync(KEYS.REFRESH_TOKEN, pair.refreshToken),
-      SecureStore.setItemAsync(KEYS.USER, JSON.stringify(pair.user)),
+      SecureStore.setItemAsync(STORAGE_KEYS.ACCESS_TOKEN, pair.accessToken),
+      SecureStore.setItemAsync(STORAGE_KEYS.REFRESH_TOKEN, pair.refreshToken),
+      SecureStore.setItemAsync(STORAGE_KEYS.USER, JSON.stringify(pair.user)),
     ]).catch(() => {});
   },
 
@@ -198,9 +211,9 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     });
     // Clear SecureStore (fire-and-forget)
     Promise.all([
-      SecureStore.deleteItemAsync(KEYS.ACCESS_TOKEN),
-      SecureStore.deleteItemAsync(KEYS.REFRESH_TOKEN),
-      SecureStore.deleteItemAsync(KEYS.USER),
+      SecureStore.deleteItemAsync(STORAGE_KEYS.ACCESS_TOKEN),
+      SecureStore.deleteItemAsync(STORAGE_KEYS.REFRESH_TOKEN),
+      SecureStore.deleteItemAsync(STORAGE_KEYS.USER),
     ]).catch(() => {});
   },
 

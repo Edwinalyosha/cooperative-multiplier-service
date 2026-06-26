@@ -5,11 +5,10 @@ import { AppState, AppStateStatus } from 'react-native';
 import * as SecureStore from 'expo-secure-store';
 import { useAuthStore } from '@/features/auth/store/auth.store';
 import { SessionExpiredModal } from '@/features/auth/components/session-expired-modal';
+import { STORAGE_KEYS } from '@/constants/storage-keys';
 import '@/global.css';
 
 SplashScreen.preventAutoHideAsync();
-
-const ONBOARDING_KEY = 'onboarding_complete';
 
 export default function RootLayout() {
   const {
@@ -28,10 +27,17 @@ export default function RootLayout() {
   useEffect(() => {
     Promise.all([
       initialize(),
-      SecureStore.getItemAsync(ONBOARDING_KEY).then((val) => {
-        setOnboardingSeen(val === '1');
-        setOnboardingChecked(true);
-      }),
+      SecureStore.getItemAsync(STORAGE_KEYS.ONBOARDING_COMPLETE)
+        .then((val) => {
+          setOnboardingSeen(val === '1');
+        })
+        .catch(() => {
+          // SecureStore unavailable — treat as first run
+          setOnboardingSeen(false);
+        })
+        .finally(() => {
+          setOnboardingChecked(true);
+        }),
     ]).then(() => {
       SplashScreen.hideAsync();
     });

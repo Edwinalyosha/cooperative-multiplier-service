@@ -11,7 +11,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
 import { router } from 'expo-router';
 import * as SecureStore from 'expo-secure-store';
-import { jwtDecode } from 'jwt-decode';
+import { STORAGE_KEYS } from '@/constants/storage-keys';
 import Animated, {
   useAnimatedStyle,
   useSharedValue,
@@ -20,8 +20,6 @@ import Animated, {
 } from 'react-native-reanimated';
 import { OnboardingDot } from '../components/onboarding-dot';
 
-const ONBOARDING_KEY = 'onboarding_complete';
-const ACCESS_TOKEN_KEY = 'auth_access_token';
 
 interface PageConfig {
   id: string;
@@ -160,22 +158,6 @@ export function OnboardingScreen() {
   const [activeIndex, setActiveIndex] = useState(0);
   const listRef = useRef<FlatList<PageConfig>>(null);
 
-  React.useEffect(() => {
-    (async () => {
-      try {
-        const token = await SecureStore.getItemAsync(ACCESS_TOKEN_KEY);
-        if (token) {
-          const { exp } = jwtDecode<{ exp: number }>(token);
-          if (exp > Date.now() / 1000 + 60) {
-            router.replace('/(app)');
-          }
-        }
-      } catch {
-        // No valid token — stay on onboarding
-      }
-    })();
-  }, []);
-
   const handleNext = useCallback(() => {
     if (activeIndex < PAGES.length - 1) {
       listRef.current?.scrollToIndex({ index: activeIndex + 1, animated: true });
@@ -183,7 +165,7 @@ export function OnboardingScreen() {
   }, [activeIndex]);
 
   const handleProceed = useCallback(async () => {
-    await SecureStore.setItemAsync(ONBOARDING_KEY, '1');
+    await SecureStore.setItemAsync(STORAGE_KEYS.ONBOARDING_COMPLETE, '1');
     router.replace('/(auth)/login');
   }, []);
 
