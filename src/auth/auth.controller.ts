@@ -1,7 +1,9 @@
-import { Body, Controller, Get, Headers, Post } from '@nestjs/common';
-import { ApiOperation, ApiTags } from '@nestjs/swagger';
+import { Body, Controller, Get, Headers, Post, UseGuards } from '@nestjs/common';
+import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { AuthService } from './auth.service';
 import { LoginDto } from './dto/login.dto';
+import { CreateUserDto } from './dto/create-user.dto';
+import { ApiKeyGuard } from './guards/api-key.guard';
 
 @ApiTags('auth')
 @Controller('auth')
@@ -20,5 +22,24 @@ export class AuthController {
     const token = authorization?.replace(/^Bearer\s+/i, '') ?? '';
     const valid = this.authService.validateToken(token);
     return { valid };
+  }
+
+  @Post('users')
+  @UseGuards(ApiKeyGuard)
+  @ApiBearerAuth()
+  @ApiOperation({
+    summary:
+      'Admin-only: create a director/finance-manager login for the loan-approval workflow',
+  })
+  createUser(@Body() dto: CreateUserDto) {
+    return this.authService.createUser(dto);
+  }
+
+  @Get('users')
+  @UseGuards(ApiKeyGuard)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Admin-only: list workflow logins' })
+  listUsers() {
+    return this.authService.listUsers();
   }
 }

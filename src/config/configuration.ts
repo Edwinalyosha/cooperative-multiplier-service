@@ -33,4 +33,13 @@ export default () => ({
       .map((o) => o.trim())
       .filter(Boolean),
   },
+  jwt: {
+    accessSecret:
+      process.env.JWT_ACCESS_SECRET ?? 'dev-jwt-secret-change-in-prod',
+    accessExpiresIn: process.env.JWT_ACCESS_EXPIRES_IN ?? '15m',
+    refreshTtlSeconds: parseInt(
+      process.env.JWT_REFRESH_TTL_SECONDS ?? '604800',
+      10,
+    ),
+  },
 });

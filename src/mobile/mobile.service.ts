@@ -1,22 +1,15 @@
 import { Injectable } from '@nestjs/common';
-import { AuthService } from '../auth/auth.service';
 import { FineractService } from '../fineract/fineract.service';
 import { MultiplierService } from '../multiplier/multiplier.service';
 import { ReportsService } from '../reports/reports.service';
-import { LoginDto } from '../auth/dto/login.dto';
 
 @Injectable()
 export class MobileService {
   constructor(
-    private readonly authService: AuthService,
     private readonly multiplierService: MultiplierService,
     private readonly fineractService: FineractService,
     private readonly reportsService: ReportsService,
   ) {}
-
-  login(dto: LoginDto) {
-    return this.authService.login(dto);
-  }
 
   async getDashboard(clientId: number) {
     const [profile, eligibility, recentHistory, fineractBalance] =

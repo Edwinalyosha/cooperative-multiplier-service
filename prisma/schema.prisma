@@ -12,31 +12,122 @@ model DirectorMultiplier {
   clientId                           Int      @unique
   currentMultiplier                  Decimal  @db.Decimal(10,3)
   loanMultiple                       Decimal  @db.Decimal(10,3)
+
   contributionScore                  Int?
   repaymentScore                     Int?
-  consecutiveOnTimeContributions     Int?     @default(0)
-  consecutiveOnTimeRepayments        Int?     @default(0)
+
+  consecutiveOnTimeContributions     Int? @default(0)
+  consecutiveOnTimeRepayments        Int? @default(0)
+
   lastContributionStatus             String?
   lastRepaymentStatus                String?
-  contributionBalance                Decimal? @db.Decimal(14, 2)
-  maxLoanAmount                      Decimal? @db.Decimal(14, 2)
-  isEligible                         Boolean? @default(false)
+
+  contributionBalance                Decimal?  @db.Decimal(14, 2)
+  maxLoanAmount                      Decimal?  @db.Decimal(14, 2)
+  isEligible                         Boolean?  @default(false)
   eligibilityCheckedAt               DateTime?
+
   createdAt                          DateTime @default(now())
   updatedAt                          DateTime @updatedAt
+
   history                            MultiplierHistory[]
 }
 
 model MultiplierHistory {
   id              Int      @id @default(autoincrement())
+
   clientId        Int
+
   eventType       String
   oldMultiplier   Decimal? @db.Decimal(10,3)
   newMultiplier   Decimal? @db.Decimal(10,3)
   stepAmount      Decimal? @db.Decimal(10,3)
+
   direction       String?
   triggeredBy     String?
   notes           String?
+
   createdAt       DateTime @default(now())
+
   director        DirectorMultiplier @relation(fields: [clientId], references: [clientId])
+}
+
+/// Login identity for the loan-approval workflow. Deliberately separate from
+/// Fineract's own "Admin User" concept — this grants only what the approval
+/// flow needs (see context/loan-approval-workflow-spec.md), not back-office
+/// access to Fineract itself.
+model User {
+  id           Int      @id @default(autoincrement())
+  /// Links to DirectorMultiplier.clientId when this user is also a director.
+  /// Nullable so a future non-director finance manager can exist.
+  clientId     Int?     @unique
+  username     String   @unique
+  passwordHash String
+  role         UserRole
+
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+}
+
+enum UserRole {
+  DIRECTOR
+  FINANCE_MANAGER
+  ADMIN
+}
+
+/// A member's loan request moving through the two-stage approval workflow.
+/// Fineract stays authoritative for the actual money movement — fineractLoanId
+/// points at the real loan record there; this table is the decision/audit
+/// layer in front of it. See context/loan-approval-workflow-spec.md.
+model LoanApplication {
+  id                        Int       @id @default(autoincrement())
+  clientId                  Int
+  requestedAmount           Decimal   @db.Decimal(14, 2)
+  /// Snapshot of eligibility at request time — never recalculated later.
+  eligibilityAtRequestTime  Decimal   @db.Decimal(14, 2)
+  status                    LoanApplicationStatus @default(PENDING_DIRECTOR_APPROVAL)
+  requestedAt               DateTime  @default(now())
+
+  financeDecidedBy          Int?
+  financeDecidedAt          DateTime?
+  financeNotes              String?
+
+  /// Set at creation time (Fineract "Submitted and pending approval" state) —
+  /// not at final approval. See spec doc for why the sequencing matters.
+  fineractLoanId             Int?
+
+  approvals                  LoanApproval[]
+}
+
+enum LoanApplicationStatus {
+  PENDING_DIRECTOR_APPROVAL
+  PENDING_FINANCE_APPROVAL
+  APPROVED
+  REJECTED
+  WITHDRAWN
+  EXPIRED
+}
+
+/// One row per director vote on a LoanApplication. The first APPROVE becomes
+/// the loan's guarantor (isGuarantor = true) — real financial liability held
+/// against their Fineract savings, not duplicated here. The second APPROVE
+/// carries no such liability. See spec doc for the app-side consent
+/// requirement this implies.
+model LoanApproval {
+  id                Int       @id @default(autoincrement())
+  loanApplicationId Int
+  directorClientId  Int
+  decision          ApprovalDecision
+  isGuarantor       Boolean   @default(false)
+  notes             String?
+  decidedAt         DateTime  @default(now())
+
+  loanApplication   LoanApplication @relation(fields: [loanApplicationId], references: [id])
+
+  @@unique([loanApplicationId, directorClientId])
+}
+
+enum ApprovalDecision {
+  APPROVE
+  REJECT
 }
