@@ -10,6 +10,9 @@ import {
   FineractClient,
   FineractClientAccountsResponse,
   FineractSavingsAccountDetail,
+  FineractLoanProductDetail,
+  CreateFineractLoanParams,
+  CreateFineractLoanResponse,
 } from './fineract.types';
 
 @Injectable()
@@ -59,6 +62,27 @@ export class FineractService {
       }),
     );
     return data;
+  }
+
+  private async post<T>(path: string, body: unknown): Promise<T> {
+    const url = `${this.baseUrl}${path.startsWith('/') ? path : `/${path}`}`;
+    const { data } = await firstValueFrom(
+      this.http.post<T>(url, body, {
+        headers: this.headers,
+        auth: this.auth,
+        timeout: 30_000,
+      }),
+    );
+    return data;
+  }
+
+  /** Fineract expects "dd MMMM yyyy" (e.g. "10 August 2026") with a locale. */
+  static formatFineractDate(date: Date): string {
+    const months = [
+      'January', 'February', 'March', 'April', 'May', 'June',
+      'July', 'August', 'September', 'October', 'November', 'December',
+    ];
+    return `${date.getDate()} ${months[date.getMonth()]} ${date.getFullYear()}`;
   }
 
   async getClient(clientId: number): Promise<FineractClient | null> {
@@ -137,5 +161,52 @@ export class FineractService {
     return accounts.loanAccounts
       .filter((loan) => loan.status?.active !== false)
       .map((loan) => loan.id);
+  }
+
+  /**
+   * Live product config (rate, term defaults) — fetched fresh each time
+   * rather than cached/hardcoded, so a manual rate edit in Fineract (like
+   * the Tier2 fix made 2026-08-10) is always reflected without a
+   * multiplier-service redeploy.
+   */
+  async getLoanProduct(productId: number): Promise<FineractLoanProductDetail> {
+    return this.get<FineractLoanProductDetail>(`/loanproducts/${productId}`);
+  }
+
+  /**
+   * Creates a loan application in Fineract — "Submitted and pending
+   * approval" state. Does not move money; that only happens on later
+   * approve+disburse (Phase 4). See
+   * context/loan-approval-workflow-spec.md.
+   */
+  async createLoanApplication(
+    params: CreateFineractLoanParams,
+  ): Promise<CreateFineractLoanResponse> {
+    const response = await this.post<{ loanId: number; resourceId?: number }>(
+      '/loans',
+      {
+        clientId: params.clientId,
+        productId: params.productId,
+        principal: params.principal,
+        loanType: 'individual',
+        interestRatePerPeriod: params.interestRatePerPeriod,
+        interestRateFrequencyType: 2, // per month, matches all current tiers
+        numberOfRepayments: params.numberOfRepayments,
+        repaymentEvery: params.repaymentEvery,
+        repaymentFrequencyType: params.repaymentFrequencyType,
+        loanTermFrequency: params.loanTermFrequency,
+        loanTermFrequencyType: params.loanTermFrequencyType,
+        interestType: params.interestType,
+        interestCalculationPeriodType: params.interestCalculationPeriodType,
+        amortizationType: params.amortizationType,
+        transactionProcessingStrategyCode:
+          params.transactionProcessingStrategyCode,
+        submittedOnDate: params.submittedOnDate,
+        expectedDisbursementDate: params.expectedDisbursementDate,
+        dateFormat: 'dd MMMM yyyy',
+        locale: 'en',
+      },
+    );
+    return { loanId: response.loanId ?? response.resourceId ?? 0 };
   }
 }
