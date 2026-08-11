@@ -1,33 +1,23 @@
 import {
   BadRequestException,
+  ConflictException,
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
-import { LoanApplicationStatus } from '@prisma/client';
+import { ApprovalDecision, LoanApplicationStatus } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { MultiplierService } from '../multiplier/multiplier.service';
 import { MultiplierQueueService } from '../queue/multiplier-queue.service';
 import { FineractService } from '../fineract/fineract.service';
 import { MultiplierEventType } from '../multiplier/multiplier-event.enum';
-import { AddGuarantorDto } from './dto/add-guarantor.dto';
 import { RecordRepaymentDto } from './dto/record-repayment.dto';
 import { ApplyLoanDto } from './dto/apply-loan.dto';
+import { DirectorDecisionDto } from './dto/director-decision.dto';
+import { FinanceDecisionDto } from './dto/finance-decision.dto';
 import { selectLoanTier } from './loan-tiers.constants';
-
-export interface GuarantorRecord {
-  id: number;
-  loanId: number;
-  guarantorClientId: number;
-  relationship: string | null;
-  notes: string | null;
-  createdAt: Date;
-}
 
 @Injectable()
 export class LoansService {
-  private readonly guarantors = new Map<number, GuarantorRecord[]>();
-  private nextId = 1;
-
   constructor(
     private readonly multiplierService: MultiplierService,
     private readonly queue: MultiplierQueueService,
@@ -130,41 +120,173 @@ export class LoansService {
     });
   }
 
-  listGuarantors(loanId: number): GuarantorRecord[] {
-    return [...(this.guarantors.get(loanId) ?? [])];
-  }
+  /**
+   * Phase 3 — director quorum vote on a pending application. The
+   * applicant cannot vote on their own request; rejections are logged but
+   * never block or count toward the 2-approval threshold ("first 2
+   * approvals win"); the FIRST approval registers that director as the
+   * loan's guarantor in Fineract (accountability record, no fund hold —
+   * decided 2026-08-10); the SECOND approval advances the application to
+   * PENDING_FINANCE_APPROVAL. See context/loan-approval-workflow-spec.md.
+   */
+  async directorDecision(
+    applicationId: number,
+    directorClientId: number,
+    dto: DirectorDecisionDto,
+  ) {
+    const application = await this.getLoanApplication(applicationId);
 
-  addGuarantor(loanId: number, dto: AddGuarantorDto): GuarantorRecord {
-    const record: GuarantorRecord = {
-      id: this.nextId++,
-      loanId,
-      guarantorClientId: dto.guarantorClientId,
-      relationship: dto.relationship ?? null,
-      notes: dto.notes ?? null,
-      createdAt: new Date(),
-    };
-
-    const existing = this.guarantors.get(loanId) ?? [];
-    existing.push(record);
-    this.guarantors.set(loanId, existing);
-    return record;
-  }
-
-  removeGuarantor(loanId: number, guarantorId: number): void {
-    const list = this.guarantors.get(loanId);
-    if (!list) {
-      throw new NotFoundException(`Loan ${loanId} has no guarantors`);
-    }
-
-    const index = list.findIndex((g) => g.id === guarantorId);
-    if (index === -1) {
-      throw new NotFoundException(
-        `Guarantor ${guarantorId} not found on loan ${loanId}`,
+    if (application.clientId === directorClientId) {
+      throw new BadRequestException(
+        'A director cannot approve or reject their own loan application.',
       );
     }
 
-    list.splice(index, 1);
-    this.guarantors.set(loanId, list);
+    if (application.status !== LoanApplicationStatus.PENDING_DIRECTOR_APPROVAL) {
+      throw new BadRequestException(
+        `Application ${applicationId} is not awaiting director approval (status: ${application.status}).`,
+      );
+    }
+
+    const existingVote = application.approvals.find(
+      (a) => a.directorClientId === directorClientId,
+    );
+    if (existingVote) {
+      throw new ConflictException(
+        `Director ${directorClientId} has already voted on application ${applicationId}.`,
+      );
+    }
+
+    if (dto.decision === ApprovalDecision.REJECT) {
+      await this.prisma.loanApproval.create({
+        data: {
+          loanApplicationId: applicationId,
+          directorClientId,
+          decision: ApprovalDecision.REJECT,
+          notes: dto.notes,
+        },
+      });
+      return this.getLoanApplication(applicationId);
+    }
+
+    const priorApprovals = application.approvals.filter(
+      (a) => a.decision === ApprovalDecision.APPROVE,
+    );
+    const isFirstApproval = priorApprovals.length === 0;
+    let guarantorMessage: string | null = null;
+
+    if (isFirstApproval && application.fineractLoanId) {
+      try {
+        await this.fineract.addGuarantor({
+          loanId: application.fineractLoanId,
+          guarantorClientId: directorClientId,
+        });
+      } catch (error) {
+        const fineractMessage =
+          (error as { response?: { data?: { errors?: { defaultUserMessage?: string }[] } } })
+            ?.response?.data?.errors?.[0]?.defaultUserMessage;
+        throw new BadRequestException(
+          `Could not register director ${directorClientId} as guarantor in Fineract` +
+            (fineractMessage ? `: ${fineractMessage}` : '.'),
+        );
+      }
+      guarantorMessage =
+        'You are now the guarantor for this loan — you are responsible for ensuring the borrower repays it.';
+    }
+
+    await this.prisma.loanApproval.create({
+      data: {
+        loanApplicationId: applicationId,
+        directorClientId,
+        decision: ApprovalDecision.APPROVE,
+        isGuarantor: isFirstApproval,
+        notes: dto.notes,
+      },
+    });
+
+    const willCompleteQuorum = priorApprovals.length === 1;
+    if (willCompleteQuorum) {
+      await this.prisma.loanApplication.update({
+        where: { id: applicationId },
+        data: { status: LoanApplicationStatus.PENDING_FINANCE_APPROVAL },
+      });
+    }
+
+    const updated = await this.getLoanApplication(applicationId);
+    return { ...updated, guarantorMessage };
+  }
+
+  /**
+   * Phase 4 — finance manager's final, unilateral decision. Only reachable
+   * once the director quorum has already advanced the application to
+   * PENDING_FINANCE_APPROVAL (finance never intervenes earlier). Approve
+   * triggers real Fineract approve + disburse (money actually moves);
+   * reject triggers Fineract's native reject transition — no fund hold to
+   * release, since the guarantor design carries no fund hold at all. See
+   * context/loan-approval-workflow-spec.md.
+   */
+  async financeDecision(
+    applicationId: number,
+    financeUserId: number,
+    dto: FinanceDecisionDto,
+  ) {
+    const application = await this.getLoanApplication(applicationId);
+
+    if (application.status !== LoanApplicationStatus.PENDING_FINANCE_APPROVAL) {
+      throw new BadRequestException(
+        `Application ${applicationId} is not awaiting finance approval (status: ${application.status}).`,
+      );
+    }
+
+    if (!application.fineractLoanId) {
+      throw new BadRequestException(
+        `Application ${applicationId} has no linked Fineract loan.`,
+      );
+    }
+
+    const today = FineractService.formatFineractDate(new Date());
+
+    try {
+      if (dto.decision === ApprovalDecision.APPROVE) {
+        await this.fineract.approveLoan({
+          loanId: application.fineractLoanId,
+          approvedOnDate: today,
+          expectedDisbursementDate: today,
+        });
+        await this.fineract.disburseLoan({
+          loanId: application.fineractLoanId,
+          actualDisbursementDate: today,
+        });
+      } else {
+        await this.fineract.rejectLoan({
+          loanId: application.fineractLoanId,
+          rejectedOnDate: today,
+        });
+      }
+    } catch (error) {
+      const fineractMessage =
+        (error as { response?: { data?: { errors?: { defaultUserMessage?: string }[] } } })
+          ?.response?.data?.errors?.[0]?.defaultUserMessage;
+      throw new BadRequestException(
+        `Fineract ${dto.decision === ApprovalDecision.APPROVE ? 'approve/disburse' : 'reject'} failed` +
+          (fineractMessage ? `: ${fineractMessage}` : '.'),
+      );
+    }
+
+    await this.prisma.loanApplication.update({
+      where: { id: applicationId },
+      data: {
+        status:
+          dto.decision === ApprovalDecision.APPROVE
+            ? LoanApplicationStatus.APPROVED
+            : LoanApplicationStatus.REJECTED,
+        financeDecidedBy: financeUserId,
+        financeDecidedAt: new Date(),
+        financeNotes: dto.notes,
+      },
+    });
+
+    return this.getLoanApplication(applicationId);
   }
 
   async recordRepayment(dto: RecordRepaymentDto, async = false) {

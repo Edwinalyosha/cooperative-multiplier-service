@@ -13,7 +13,13 @@ import {
   FineractLoanProductDetail,
   CreateFineractLoanParams,
   CreateFineractLoanResponse,
+  AddGuarantorParams,
+  ApproveFineractLoanParams,
+  DisburseFineractLoanParams,
+  RejectFineractLoanParams,
 } from './fineract.types';
+
+const DEFAULT_GUARANTOR_RELATIONSHIP_ID = 8; // "Business Associate"
 
 @Injectable()
 export class FineractService {
@@ -208,5 +214,54 @@ export class FineractService {
       },
     );
     return { loanId: response.loanId ?? response.resourceId ?? 0 };
+  }
+
+  /**
+   * Registers the first-approving director as the loan's guarantor in
+   * Fineract — relationship-only, deliberately no fund hold (decided
+   * 2026-08-10: guarantor is an accountability record, not a financial
+   * mechanism; recorded in Fineract so it's trackable there rather than
+   * duplicated in our own tables). Fineract itself already rejects a
+   * borrower guaranteeing their own loan, as a backstop to our own check.
+   */
+  async addGuarantor(params: AddGuarantorParams): Promise<void> {
+    await this.post(`/loans/${params.loanId}/guarantors`, {
+      guarantorTypeId: 1, // CUSTOMER (existing client)
+      entityId: params.guarantorClientId,
+      relationshipId:
+        params.relationshipId ?? DEFAULT_GUARANTOR_RELATIONSHIP_ID,
+      locale: 'en',
+    });
+  }
+
+  /** Phase 4 — finance approval. Money doesn't move yet; disburseLoan
+   * (called right after, in the same LoansService flow) is what does. */
+  async approveLoan(params: ApproveFineractLoanParams): Promise<void> {
+    await this.post(`/loans/${params.loanId}?command=approve`, {
+      approvedOnDate: params.approvedOnDate,
+      expectedDisbursementDate: params.expectedDisbursementDate,
+      locale: 'en',
+      dateFormat: 'dd MMMM yyyy',
+    });
+  }
+
+  /** Phase 4 — the actual money-movement step. */
+  async disburseLoan(params: DisburseFineractLoanParams): Promise<void> {
+    await this.post(`/loans/${params.loanId}?command=disburse`, {
+      actualDisbursementDate: params.actualDisbursementDate,
+      locale: 'en',
+      dateFormat: 'dd MMMM yyyy',
+    });
+  }
+
+  /** Phase 4 — finance rejection. No fund hold to release (see spec doc —
+   * that step was in an earlier draft, dropped once the guarantor design
+   * became relationship-only). */
+  async rejectLoan(params: RejectFineractLoanParams): Promise<void> {
+    await this.post(`/loans/${params.loanId}?command=reject`, {
+      rejectedOnDate: params.rejectedOnDate,
+      locale: 'en',
+      dateFormat: 'dd MMMM yyyy',
+    });
   }
 }

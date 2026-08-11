@@ -2,7 +2,6 @@ import {
   BadRequestException,
   Body,
   Controller,
-  Delete,
   Get,
   Param,
   ParseIntPipe,
@@ -14,9 +13,10 @@ import {
 import { ApiBearerAuth, ApiOperation, ApiQuery, ApiTags } from '@nestjs/swagger';
 import { UserRole } from '@prisma/client';
 import { LoansService } from './loans.service';
-import { AddGuarantorDto } from './dto/add-guarantor.dto';
 import { RecordRepaymentDto } from './dto/record-repayment.dto';
 import { ApplyLoanDto } from './dto/apply-loan.dto';
+import { DirectorDecisionDto } from './dto/director-decision.dto';
+import { FinanceDecisionDto } from './dto/finance-decision.dto';
 import { MobileJwtGuard } from '../mobile-auth/guards/mobile-jwt.guard';
 import { RolesGuard } from '../mobile-auth/guards/roles.guard';
 import { Roles } from '../mobile-auth/decorators/roles.decorator';
@@ -67,6 +67,41 @@ export class LoansController {
     return this.loansService.getLoanApplication(id);
   }
 
+  @Post('applications/:id/director-decision')
+  @UseGuards(MobileJwtGuard, RolesGuard)
+  @Roles(UserRole.DIRECTOR)
+  @ApiBearerAuth()
+  @ApiOperation({
+    summary:
+      "Director approves or rejects a pending loan application. Voting director's clientId comes from the token, not the body. Applicant cannot vote on their own request; rejections are logged but never block or count toward the 2-approval quorum; the first approval registers that director as the loan's guarantor in Fineract (no fund hold).",
+  })
+  directorDecision(
+    @Param('id', ParseIntPipe) id: number,
+    @Body() dto: DirectorDecisionDto,
+    @Req() req: { user: MobileJwtPayload },
+  ) {
+    if (!req.user.clientId) {
+      throw new BadRequestException('This account has no linked clientId.');
+    }
+    return this.loansService.directorDecision(id, req.user.clientId, dto);
+  }
+
+  @Post('applications/:id/finance-decision')
+  @UseGuards(MobileJwtGuard, RolesGuard)
+  @Roles(UserRole.FINANCE_MANAGER)
+  @ApiBearerAuth()
+  @ApiOperation({
+    summary:
+      "Finance manager's final decision on an application that has already cleared the director quorum. Approve triggers real Fineract approve + disburse (money moves); reject triggers Fineract's native reject. Unilateral — only reachable once status is PENDING_FINANCE_APPROVAL.",
+  })
+  financeDecision(
+    @Param('id', ParseIntPipe) id: number,
+    @Body() dto: FinanceDecisionDto,
+    @Req() req: { user: MobileJwtPayload },
+  ) {
+    return this.loansService.financeDecision(id, req.user.sub, dto);
+  }
+
   @Post('repayment/record')
   @ApiOperation({
     summary: 'Record repayment event (on-time, late, or early payoff)',
@@ -85,28 +120,4 @@ export class LoansController {
     return this.loansService.getRepaymentSummary(clientId);
   }
 
-  @Get(':loanId/guarantors')
-  @ApiOperation({ summary: 'List guarantors for a loan' })
-  listGuarantors(@Param('loanId', ParseIntPipe) loanId: number) {
-    return this.loansService.listGuarantors(loanId);
-  }
-
-  @Post(':loanId/guarantors')
-  @ApiOperation({ summary: 'Add a guarantor to a loan' })
-  addGuarantor(
-    @Param('loanId', ParseIntPipe) loanId: number,
-    @Body() dto: AddGuarantorDto,
-  ) {
-    return this.loansService.addGuarantor(loanId, dto);
-  }
-
-  @Delete(':loanId/guarantors/:guarantorId')
-  @ApiOperation({ summary: 'Remove a guarantor from a loan' })
-  removeGuarantor(
-    @Param('loanId', ParseIntPipe) loanId: number,
-    @Param('guarantorId', ParseIntPipe) guarantorId: number,
-  ) {
-    this.loansService.removeGuarantor(loanId, guarantorId);
-    return { deleted: true, loanId, guarantorId };
-  }
 }

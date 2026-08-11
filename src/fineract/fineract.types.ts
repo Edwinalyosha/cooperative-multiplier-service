@@ -71,3 +71,34 @@ export interface CreateFineractLoanParams {
 export interface CreateFineractLoanResponse {
   loanId: number;
 }
+
+/**
+ * Registers an existing Fineract client as a loan's guarantor —
+ * relationship-only, no fund hold. guarantorTypeId 1 = CUSTOMER
+ * (existing client). See context/loan-approval-workflow-spec.md.
+ */
+export interface AddGuarantorParams {
+  loanId: number;
+  guarantorClientId: number;
+  relationshipId?: number;
+}
+
+/** Phase 4 — finance manager's final decision. Approve = approve +
+ * disburse together (money actually moves on approve); reject = Fineract's
+ * native reject transition. Both are state changes on the loan Phase 2
+ * already created — nothing new is created here. */
+export interface ApproveFineractLoanParams {
+  loanId: number;
+  approvedOnDate: string;
+  expectedDisbursementDate: string;
+}
+
+export interface DisburseFineractLoanParams {
+  loanId: number;
+  actualDisbursementDate: string;
+}
+
+export interface RejectFineractLoanParams {
+  loanId: number;
+  rejectedOnDate: string;
+}
