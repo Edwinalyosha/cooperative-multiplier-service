@@ -102,6 +102,24 @@ export class LoansController {
     return this.loansService.financeDecision(id, req.user.sub, dto);
   }
 
+  @Post('applications/:id/withdraw')
+  @UseGuards(MobileJwtGuard, RolesGuard)
+  @Roles(UserRole.DIRECTOR)
+  @ApiBearerAuth()
+  @ApiOperation({
+    summary:
+      "Borrower withdraws their own pending application. Only the applicant (clientId from the token) can do this, and only while still PENDING_DIRECTOR_APPROVAL or PENDING_FINANCE_APPROVAL.",
+  })
+  withdrawApplication(
+    @Param('id', ParseIntPipe) id: number,
+    @Req() req: { user: MobileJwtPayload },
+  ) {
+    if (!req.user.clientId) {
+      throw new BadRequestException('This account has no linked clientId.');
+    }
+    return this.loansService.withdrawApplication(id, req.user.clientId);
+  }
+
   @Post('repayment/record')
   @ApiOperation({
     summary: 'Record repayment event (on-time, late, or early payoff)',

@@ -26,6 +26,10 @@ export default () => ({
   cron: {
     eligibilityRefresh: process.env.CRON_ELIGIBILITY_REFRESH ?? '0 2 * * *',
     streakCheck: process.env.CRON_STREAK_CHECK ?? '0 6 * * *',
+    /** Hourly by default (2026-08-11 decision) — keeps the 48h loan
+     * application expiry deadline reasonably tight rather than the daily
+     * cadence used by the other two schedulers. */
+    loanExpiryCheck: process.env.CRON_LOAN_EXPIRY_CHECK ?? '0 * * * *',
   },
   mobile: {
     corsOrigins: (process.env.MOBILE_CORS_ORIGINS ?? '*')

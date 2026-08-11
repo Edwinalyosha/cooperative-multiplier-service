@@ -2,6 +2,7 @@ import {
   BadRequestException,
   ConflictException,
   Injectable,
+  Logger,
   NotFoundException,
 } from '@nestjs/common';
 import { ApprovalDecision, LoanApplicationStatus } from '@prisma/client';
@@ -18,6 +19,8 @@ import { selectLoanTier } from './loan-tiers.constants';
 
 @Injectable()
 export class LoansService {
+  private readonly logger = new Logger(LoansService.name);
+
   constructor(
     private readonly multiplierService: MultiplierService,
     private readonly queue: MultiplierQueueService,
@@ -287,6 +290,104 @@ export class LoansService {
     });
 
     return this.getLoanApplication(applicationId);
+  }
+
+  /**
+   * Phase 5 — borrower withdraws their own pending application. Only the
+   * applicant can do this (checked against the caller's clientId, not
+   * trusted from any body param); only while still in one of the two
+   * pending stages. No fund hold to release (see Phase 3 correction).
+   */
+  async withdrawApplication(applicationId: number, clientId: number) {
+    const application = await this.getLoanApplication(applicationId);
+
+    if (application.clientId !== clientId) {
+      throw new BadRequestException(
+        'Only the applicant can withdraw their own loan application.',
+      );
+    }
+
+    if (
+      application.status !== LoanApplicationStatus.PENDING_DIRECTOR_APPROVAL &&
+      application.status !== LoanApplicationStatus.PENDING_FINANCE_APPROVAL
+    ) {
+      throw new BadRequestException(
+        `Application ${applicationId} can no longer be withdrawn (status: ${application.status}).`,
+      );
+    }
+
+    if (application.fineractLoanId) {
+      try {
+        await this.fineract.withdrawLoan({
+          loanId: application.fineractLoanId,
+          withdrawnOnDate: FineractService.formatFineractDate(new Date()),
+        });
+      } catch (error) {
+        const fineractMessage =
+          (error as { response?: { data?: { errors?: { defaultUserMessage?: string }[] } } })
+            ?.response?.data?.errors?.[0]?.defaultUserMessage;
+        throw new BadRequestException(
+          `Fineract withdrawal failed` + (fineractMessage ? `: ${fineractMessage}` : '.'),
+        );
+      }
+    }
+
+    await this.prisma.loanApplication.update({
+      where: { id: applicationId },
+      data: { status: LoanApplicationStatus.WITHDRAWN },
+    });
+
+    return this.getLoanApplication(applicationId);
+  }
+
+  /**
+   * Phase 5 — 48h auto-expiry sweep, called by loan-expiry.scheduler.ts
+   * (hourly, per user decision 2026-08-11). Closes out via Fineract's
+   * `reject` transition, not withdraw — "withdrawn" implies the client
+   * acted, which isn't true here; the system closed it because nobody
+   * decided in time. One continuous 48h window from requestedAt covering
+   * both pending stages combined (not reset on advancing stages).
+   */
+  async expireStaleApplications(): Promise<{ expired: number; failed: number }> {
+    const cutoff = new Date(Date.now() - 48 * 60 * 60 * 1000);
+    const stale = await this.prisma.loanApplication.findMany({
+      where: {
+        status: {
+          in: [
+            LoanApplicationStatus.PENDING_DIRECTOR_APPROVAL,
+            LoanApplicationStatus.PENDING_FINANCE_APPROVAL,
+          ],
+        },
+        requestedAt: { lt: cutoff },
+      },
+    });
+
+    let expired = 0;
+    let failed = 0;
+
+    for (const application of stale) {
+      try {
+        if (application.fineractLoanId) {
+          await this.fineract.rejectLoan({
+            loanId: application.fineractLoanId,
+            rejectedOnDate: FineractService.formatFineractDate(new Date()),
+          });
+        }
+        await this.prisma.loanApplication.update({
+          where: { id: application.id },
+          data: { status: LoanApplicationStatus.EXPIRED },
+        });
+        expired++;
+      } catch (error) {
+        this.logger.warn(
+          `Failed to expire loan application ${application.id}`,
+          error,
+        );
+        failed++;
+      }
+    }
+
+    return { expired, failed };
   }
 
   async recordRepayment(dto: RecordRepaymentDto, async = false) {

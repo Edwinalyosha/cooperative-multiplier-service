@@ -102,3 +102,11 @@ export interface RejectFineractLoanParams {
   loanId: number;
   rejectedOnDate: string;
 }
+
+/** Phase 5 — borrower-initiated withdrawal. Fineract's command is
+ * `withdrawnByApplicant` (confirmed live 2026-08-11 — not the more
+ * guessable `withdrawnByClient`, which Fineract rejects). */
+export interface WithdrawFineractLoanParams {
+  loanId: number;
+  withdrawnOnDate: string;
+}

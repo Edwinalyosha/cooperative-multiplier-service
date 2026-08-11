@@ -17,6 +17,7 @@ import {
   ApproveFineractLoanParams,
   DisburseFineractLoanParams,
   RejectFineractLoanParams,
+  WithdrawFineractLoanParams,
 } from './fineract.types';
 
 const DEFAULT_GUARANTOR_RELATIONSHIP_ID = 8; // "Business Associate"
@@ -260,6 +261,19 @@ export class FineractService {
   async rejectLoan(params: RejectFineractLoanParams): Promise<void> {
     await this.post(`/loans/${params.loanId}?command=reject`, {
       rejectedOnDate: params.rejectedOnDate,
+      locale: 'en',
+      dateFormat: 'dd MMMM yyyy',
+    });
+  }
+
+  /** Phase 5 — borrower withdraws their own pending application. Used for
+   * both explicit withdrawal and the system-driven 48h expiry sweep (the
+   * expiry scheduler calls rejectLoan instead — see
+   * loan-expiry.scheduler.ts — since "withdrawn" implies the client acted,
+   * which isn't true for an auto-expiry). */
+  async withdrawLoan(params: WithdrawFineractLoanParams): Promise<void> {
+    await this.post(`/loans/${params.loanId}?command=withdrawnByApplicant`, {
+      withdrawnOnDate: params.withdrawnOnDate,
       locale: 'en',
       dateFormat: 'dd MMMM yyyy',
     });

@@ -17,5 +17,6 @@ import { MobileAuthModule } from '../mobile-auth/mobile-auth.module';
   ],
   providers: [LoansService],
   controllers: [LoansController],
+  exports: [LoansService],
 })
 export class LoansModule {}
