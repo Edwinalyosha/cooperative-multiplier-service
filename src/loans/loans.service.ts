@@ -390,6 +390,43 @@ export class LoansService {
     return { expired, failed };
   }
 
+  /**
+   * Returns applications currently awaiting the calling user's decision,
+   * scoped by role:
+   *   DIRECTOR       → PENDING_DIRECTOR_APPROVAL, excluding their own
+   *                    application and any they have already voted on.
+   *   FINANCE_MANAGER → PENDING_FINANCE_APPROVAL (all of them — finance
+   *                    manager has no prior-vote concept to exclude).
+   * Ordered oldest-first so the most urgent application appears at the top.
+   */
+  async listPendingMyDecision(
+    role: string,
+    clientId: number | null,
+  ) {
+    if (role === 'DIRECTOR') {
+      if (!clientId) return [];
+      return this.prisma.loanApplication.findMany({
+        where: {
+          status: LoanApplicationStatus.PENDING_DIRECTOR_APPROVAL,
+          clientId: { not: clientId },
+          approvals: { none: { directorClientId: clientId } },
+        },
+        include: { approvals: true },
+        orderBy: { requestedAt: 'asc' },
+      });
+    }
+
+    if (role === 'FINANCE_MANAGER') {
+      return this.prisma.loanApplication.findMany({
+        where: { status: LoanApplicationStatus.PENDING_FINANCE_APPROVAL },
+        include: { approvals: true },
+        orderBy: { requestedAt: 'asc' },
+      });
+    }
+
+    return [];
+  }
+
   async recordRepayment(dto: RecordRepaymentDto, async = false) {
     let eventType: MultiplierEventType;
     if (dto.earlyPayoff) {

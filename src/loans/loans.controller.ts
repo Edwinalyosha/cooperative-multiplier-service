@@ -59,6 +59,21 @@ export class LoansController {
     return this.loansService.listLoanApplicationsForClient(req.user.clientId);
   }
 
+  @Get('applications/pending-my-decision')
+  @UseGuards(MobileJwtGuard, RolesGuard)
+  @Roles(UserRole.DIRECTOR, UserRole.FINANCE_MANAGER)
+  @ApiBearerAuth()
+  @ApiOperation({
+    summary:
+      'Applications currently awaiting the caller\'s decision. Directors see PENDING_DIRECTOR_APPROVAL applications they have not yet voted on (excluding their own). Finance managers see all PENDING_FINANCE_APPROVAL applications. Ordered oldest-first.',
+  })
+  listPendingMyDecision(@Req() req: { user: MobileJwtPayload }) {
+    return this.loansService.listPendingMyDecision(
+      req.user.role,
+      req.user.clientId,
+    );
+  }
+
   @Get('applications/:id')
   @UseGuards(MobileJwtGuard)
   @ApiBearerAuth()
