@@ -131,3 +131,42 @@ enum ApprovalDecision {
   APPROVE
   REJECT
 }
+
+/// Captures a Fineract "User created" hook delivery (routed through n8n,
+/// see director-webapp/ONBOARDING-AND-AUTH-PLAN.md) before we're able to
+/// resolve it to a Client + mapping row. rawPayload is kept verbatim
+/// because the exact Fineract hook payload shape was still unconfirmed
+/// as of 2026-08-19 — this endpoint's first job is discovery, not
+/// automatic User-row creation. Once the payload shape (and how to derive
+/// clientId from it) is confirmed, resolving a row here should create the
+/// matching `User` row and set resolvedClientId/resolvedAt/status.
+model PendingOnboarding {
+  id               Int      @id @default(autoincrement())
+  fineractUsername String?
+  email            String?
+  firstname        String?
+  lastname         String?
+  fineractRole     String?
+  rawPayload       Json
+  status           OnboardingStatus @default(PENDING)
+  createdAt        DateTime @default(now())
+  resolvedAt       DateTime?
+  resolvedClientId Int?
+
+  /// Fineract Client id suggested by an exact-email match against Fineract
+  /// (see FineractService.searchClientsByEmail) — a SUGGESTION only, never
+  /// auto-applied. A human must click the emailed confirm link, which is
+  /// what actually creates the User mapping row and sets resolvedClientId.
+  suggestedClientId Int?
+  /// Random opaque token (32-byte hex) for the one-click email confirm
+  /// flow. Single-use: cleared (set null) once consumed, alongside status
+  /// flipping to RESOLVED, so a reused/replayed link can't act twice.
+  confirmToken      String?   @unique
+  tokenExpiresAt    DateTime?
+}
+
+enum OnboardingStatus {
+  PENDING
+  RESOLVED
+  IGNORED
+}

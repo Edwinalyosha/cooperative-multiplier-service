@@ -29,6 +29,13 @@ export interface FineractClient {
   accountNo?: string;
   displayName?: string;
   status?: { active?: boolean };
+  emailAddress?: string;
+}
+
+/** Fineract's standard paginated list wrapper, used by GET /clients. */
+export interface FineractClientListResponse {
+  totalFilteredRecords: number;
+  pageItems: FineractClient[];
 }
 
 /** Subset of a Fineract loan product's fields this service actually uses. */

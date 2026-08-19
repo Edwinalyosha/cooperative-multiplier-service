@@ -8,6 +8,7 @@ import { ConfigService } from '@nestjs/config';
 import { firstValueFrom } from 'rxjs';
 import {
   FineractClient,
+  FineractClientListResponse,
   FineractClientAccountsResponse,
   FineractSavingsAccountDetail,
   FineractLoanProductDetail,
@@ -99,6 +100,34 @@ export class FineractService {
     } catch (error) {
       this.logger.error(`Failed to fetch client ${clientId}`, error);
       return null;
+    }
+  }
+
+  /**
+   * Looks up Fineract Clients by exact email match, for the onboarding
+   * flow's clientId-suggestion step (see ONBOARDING-AND-AUTH-PLAN.md and
+   * PendingOnboarding). Uses Fineract's `sqlSearch` list parameter — a raw
+   * SQL WHERE-clause fragment against m_client, a documented but low-level
+   * Fineract feature. Single quotes in the input are escaped, but this is
+   * still string-built SQL rather than a parameterized query; only ever
+   * called with email addresses captured from a Fineract-admin-only Create
+   * User form, not arbitrary end-user input.
+   *
+   * Unverified against this specific Fineract instance as of 2026-08-19 —
+   * first live call should be treated as a test of this method too, not
+   * just the onboarding flow around it.
+   */
+  async searchClientsByEmail(email: string): Promise<FineractClient[]> {
+    if (!this.isConfigured()) return [];
+    const escaped = email.replace(/'/g, "''");
+    try {
+      const result = await this.get<FineractClientListResponse>(
+        `/clients?sqlSearch=${encodeURIComponent(`email_address='${escaped}'`)}`,
+      );
+      return result.pageItems ?? [];
+    } catch (error) {
+      this.logger.error(`Failed to search clients by email`, error);
+      return [];
     }
   }
 
