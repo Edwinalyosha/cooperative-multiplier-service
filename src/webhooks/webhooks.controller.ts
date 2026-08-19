@@ -1,8 +1,39 @@
-import { Body, Controller, Get, Post, Query, Res } from '@nestjs/common';
-import { ApiOperation, ApiTags } from '@nestjs/swagger';
+import {
+  Body,
+  Controller,
+  Get,
+  Param,
+  ParseIntPipe,
+  Post,
+  Query,
+  Res,
+  UseGuards,
+} from '@nestjs/common';
+import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import type { Response } from 'express';
 import { WebhooksService } from './webhooks.service';
 import { FineractWebhookDto } from './dto/fineract-event.dto';
+import { ApiKeyGuard } from '../auth/guards/api-key.guard';
+
+/** Shared HTML page renderer for both the preview (GET) and result (POST)
+ * steps of the onboarding confirm flow — kept as one small helper so both
+ * render identically styled pages. */
+function renderHtmlPage(
+  res: Response,
+  title: string,
+  body: string,
+  statusCode = 200,
+) {
+  return res
+    .status(statusCode)
+    .type('html')
+    .send(
+      `<!doctype html><html><head><meta charset="utf-8"><title>${title}</title>` +
+        `<style>body{font-family:system-ui,sans-serif;max-width:32rem;margin:4rem auto;padding:0 1rem;color:#1a1a1a}` +
+        `button{font:inherit;padding:.6rem 1.2rem;background:#1a1a1a;color:#fff;border:none;border-radius:6px;cursor:pointer}` +
+        `</style></head><body><h1>${title}</h1>${body}</body></html>`,
+    );
+}
 
 @ApiTags('webhooks')
 @Controller('webhooks')
@@ -64,53 +95,104 @@ export class WebhooksController {
   @Get('fineract/onboarding/confirm')
   @ApiOperation({
     summary:
-      'One-click confirm link (emailed via n8n/Resend): creates the real ' +
-      'User mapping row for the suggested clientId match. Single-use, ' +
-      '72h-expiring token. Renders a plain HTML result page, not JSON — ' +
-      'this is meant to be opened directly from an email client.',
+      'Preview step for the emailed confirm link — READ-ONLY, creates ' +
+      'nothing. Shows what would happen and a button that POSTs to ' +
+      'actually confirm. Split from POST deliberately: email clients and ' +
+      'corporate link-scanners auto-fetch GET links to check for malware, ' +
+      'which would otherwise silently consume a one-click GET action ' +
+      'before a human ever saw it.',
+  })
+  async previewOnboarding(@Query('token') token: string, @Res() res: Response) {
+    if (!token) {
+      return renderHtmlPage(res, 'Missing token', '<p>No confirmation token was provided.</p>', 400);
+    }
+
+    const result = await this.webhooksService.previewOnboarding(token);
+
+    switch (result.outcome) {
+      case 'ok':
+        return renderHtmlPage(
+          res,
+          'Confirm this mapping?',
+          `<ul><li><strong>Username:</strong> ${result.username}</li>` +
+            `<li><strong>Name:</strong> ${result.firstname ?? ''} ${result.lastname ?? ''}</li>` +
+            `<li><strong>Fineract Client ID:</strong> ${result.clientId}</li></ul>` +
+            `<form method="POST" action="/webhooks/fineract/onboarding/confirm?token=${encodeURIComponent(token)}">` +
+            `<button type="submit">Confirm this mapping</button></form>` +
+            `<p>Nothing is created until you click the button above.</p>`,
+        );
+      case 'not_found':
+        return renderHtmlPage(res, 'Link not valid', '<p>This confirmation link is invalid.</p>', 404);
+      case 'expired':
+        return renderHtmlPage(
+          res,
+          'Link expired',
+          '<p>This confirmation link has expired (72h limit). The entry is still in the pending-onboarding queue for manual handling.</p>',
+          410,
+        );
+      case 'already_resolved':
+        return renderHtmlPage(res, 'Already confirmed', '<p>This entry has already been resolved — no action needed.</p>');
+    }
+  }
+
+  @Post('fineract/onboarding/confirm')
+  @ApiOperation({
+    summary:
+      'Actually creates the User mapping row — only reached by submitting ' +
+      'the preview page\'s button (POST), never by a bare link click. ' +
+      'Single-use, 72h-expiring token.',
   })
   async confirmOnboarding(@Query('token') token: string, @Res() res: Response) {
-    const page = (title: string, body: string, statusCode = 200) =>
-      res
-        .status(statusCode)
-        .type('html')
-        .send(
-          `<!doctype html><html><head><meta charset="utf-8"><title>${title}</title>` +
-            `<style>body{font-family:system-ui,sans-serif;max-width:32rem;margin:4rem auto;padding:0 1rem;color:#1a1a1a}</style>` +
-            `</head><body><h1>${title}</h1><p>${body}</p></body></html>`,
-        );
-
     if (!token) {
-      return page('Missing token', 'No confirmation token was provided.', 400);
+      return renderHtmlPage(res, 'Missing token', '<p>No confirmation token was provided.</p>', 400);
     }
 
     const result = await this.webhooksService.confirmOnboarding(token);
 
     switch (result.outcome) {
       case 'confirmed':
-        return page(
+        return renderHtmlPage(
+          res,
           'Confirmed',
-          `Login mapping created for <strong>${result.username}</strong> → Fineract Client ${result.clientId}. ` +
+          `<p>Login mapping created for <strong>${result.username}</strong> → Fineract Client ${result.clientId}. ` +
             `Note: this account can't log in yet — the hybrid Fineract-based auth switch isn't built yet ` +
-            `(ONBOARDING-AND-AUTH-PLAN.md step 3). It'll start working once that ships.`,
+            `(ONBOARDING-AND-AUTH-PLAN.md step 3). It'll start working once that ships.</p>`,
         );
       case 'not_found':
-        return page('Link not valid', 'This confirmation link is invalid.', 404);
+        return renderHtmlPage(res, 'Link not valid', '<p>This confirmation link is invalid.</p>', 404);
       case 'expired':
-        return page(
+        return renderHtmlPage(
+          res,
           'Link expired',
-          'This confirmation link has expired (72h limit). The entry is still in the pending-onboarding queue for manual handling.',
+          '<p>This confirmation link has expired (72h limit). The entry is still in the pending-onboarding queue for manual handling.</p>',
           410,
         );
       case 'already_resolved':
-        return page('Already confirmed', 'This entry has already been resolved — no action needed.', 200);
+        return renderHtmlPage(res, 'Already confirmed', '<p>This entry has already been resolved — no action needed.</p>');
       case 'already_mapped':
-        return page(
+        return renderHtmlPage(
+          res,
           'Client already mapped',
-          `Fineract Client ${result.clientId} already has a login (<strong>${result.existingUsername}</strong>). ` +
-            `Can't create a second one for the same client — this entry needs manual review, not this link.`,
+          `<p>Fineract Client ${result.clientId} already has a login (<strong>${result.existingUsername}</strong>). ` +
+            `Can't create a second one for the same client — this entry needs manual review, not this link.</p>`,
           409,
         );
     }
+  }
+
+  @Post('fineract/pending-onboarding/:id/resolve')
+  @UseGuards(ApiKeyGuard)
+  @ApiBearerAuth()
+  @ApiOperation({
+    summary:
+      'Admin-only: manually resolve a PendingOnboarding entry by picking ' +
+      'the clientId by hand. For the zero/multiple-Fineract-email-match ' +
+      'cases, which never get an auto-suggested confirm link.',
+  })
+  manualResolve(
+    @Param('id', ParseIntPipe) id: number,
+    @Body('clientId', ParseIntPipe) clientId: number,
+  ) {
+    return this.webhooksService.manualResolveOnboarding(id, clientId);
   }
 }

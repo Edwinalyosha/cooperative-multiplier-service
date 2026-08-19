@@ -174,17 +174,120 @@ export class WebhooksService {
   }
 
   /**
-   * Consumes a confirm-link token: validates it (exists, PENDING,
-   * unexpired), creates the real User mapping row, and marks the
-   * PendingOnboarding entry RESOLVED. Single-use — the token is cleared
-   * (set null) as part of the same update, so a reused/replayed link
-   * fails the "exists" check on its second use.
+   * Read-only lookup for the confirm link's preview step (GET). Validates
+   * the token but creates/changes nothing — see confirmOnboarding for why
+   * this is split from the actual mutating action.
+   */
+  async previewOnboarding(token: string): Promise<
+    | {
+        outcome: 'ok';
+        username: string;
+        firstname: string | null;
+        lastname: string | null;
+        clientId: number;
+      }
+    | { outcome: 'not_found' }
+    | { outcome: 'expired' }
+    | { outcome: 'already_resolved' }
+  > {
+    const entry = await this.prisma.pendingOnboarding.findUnique({
+      where: { confirmToken: token },
+    });
+    if (!entry) return { outcome: 'not_found' };
+    if (entry.status !== 'PENDING') return { outcome: 'already_resolved' };
+    if (!entry.tokenExpiresAt || entry.tokenExpiresAt < new Date()) {
+      return { outcome: 'expired' };
+    }
+    if (!entry.suggestedClientId || !entry.fineractUsername) {
+      return { outcome: 'not_found' };
+    }
+    return {
+      outcome: 'ok',
+      username: entry.fineractUsername,
+      firstname: entry.firstname,
+      lastname: entry.lastname,
+      clientId: entry.suggestedClientId,
+    };
+  }
+
+  /**
+   * Creates the User mapping row for a PendingOnboarding entry and marks it
+   * RESOLVED, with a proactive collision check plus a P2002 catch as a
+   * safety net for a concurrent race (see confirmOnboarding's history:
+   * caught a real unhandled 500 here 2026-08-19 before this existed).
    *
    * passwordHash is a random, nobody-knows-it placeholder: the hybrid-auth
    * switch to Fineract-based login (ONBOARDING-AND-AUTH-PLAN.md step 3)
    * isn't built yet, so this row can't actually log in via password today.
    * It's forward-compatible — once step 3 ships, this row just starts
    * working, no re-creation needed.
+   */
+  private async createMappingRow(
+    entryId: number,
+    username: string,
+    clientId: number,
+    clearToken: boolean,
+  ): Promise<
+    | { outcome: 'confirmed'; username: string; clientId: number }
+    | { outcome: 'already_mapped'; existingUsername: string; clientId: number }
+  > {
+    const existing = await this.prisma.user.findUnique({
+      where: { clientId },
+    });
+    if (existing) {
+      return {
+        outcome: 'already_mapped',
+        existingUsername: existing.username,
+        clientId,
+      };
+    }
+
+    const placeholderPassword = crypto.randomBytes(24).toString('hex');
+    const passwordHash = await bcrypt.hash(placeholderPassword, 10);
+
+    try {
+      await this.prisma.$transaction([
+        this.prisma.user.create({
+          data: { username, clientId, passwordHash, role: 'DIRECTOR' },
+        }),
+        this.prisma.pendingOnboarding.update({
+          where: { id: entryId },
+          data: {
+            status: 'RESOLVED',
+            resolvedAt: new Date(),
+            resolvedClientId: clientId,
+            ...(clearToken ? { confirmToken: null } : {}),
+          },
+        }),
+      ]);
+    } catch (error) {
+      if (
+        error &&
+        typeof error === 'object' &&
+        'code' in error &&
+        error.code === 'P2002'
+      ) {
+        const raceWinner = await this.prisma.user.findUnique({
+          where: { clientId },
+        });
+        return {
+          outcome: 'already_mapped',
+          existingUsername: raceWinner?.username ?? '(unknown)',
+          clientId,
+        };
+      }
+      throw error;
+    }
+
+    return { outcome: 'confirmed', username, clientId };
+  }
+
+  /**
+   * Consumes a confirm-link token (POST only — see webhooks.controller.ts
+   * for why GET is a separate, non-mutating preview): validates it (exists,
+   * PENDING, unexpired), then delegates to createMappingRow. Single-use —
+   * the token is cleared as part of the same update, so a reused/replayed
+   * link fails the "exists" check on its second use.
    */
   async confirmOnboarding(
     token: string,
@@ -207,73 +310,35 @@ export class WebhooksService {
       return { outcome: 'not_found' };
     }
 
-    // Guard against the same Fineract Client already having a User mapping
-    // (User.clientId is unique — one director-webapp login per Client).
-    // Caught this the hard way 2026-08-19: repeated test payloads all
-    // matched clientId 1, which john_doe_test already owns, and the raw
-    // DB constraint violation bubbled up as an unhandled 500 instead of a
-    // clean message. Checking proactively here for a clear result; the
-    // transaction below is still wrapped as a safety net for the race
-    // where two confirms land concurrently.
-    const existing = await this.prisma.user.findUnique({
-      where: { clientId: entry.suggestedClientId },
+    return this.createMappingRow(
+      entry.id,
+      entry.fineractUsername,
+      entry.suggestedClientId,
+      true,
+    );
+  }
+
+  /**
+   * Admin-only (ApiKeyGuard, same convention as POST /auth/users) manual
+   * resolution for entries that never got an auto-match confirm link —
+   * zero or multiple Fineract Client email matches. Lets an admin pick the
+   * correct clientId by hand instead of the entry sitting stuck forever.
+   */
+  async manualResolveOnboarding(
+    id: number,
+    clientId: number,
+  ): Promise<
+    | { outcome: 'confirmed'; username: string; clientId: number }
+    | { outcome: 'already_mapped'; existingUsername: string; clientId: number }
+    | { outcome: 'not_found' }
+    | { outcome: 'already_resolved' }
+  > {
+    const entry = await this.prisma.pendingOnboarding.findUnique({
+      where: { id },
     });
-    if (existing) {
-      return {
-        outcome: 'already_mapped',
-        existingUsername: existing.username,
-        clientId: entry.suggestedClientId,
-      };
-    }
+    if (!entry || !entry.fineractUsername) return { outcome: 'not_found' };
+    if (entry.status !== 'PENDING') return { outcome: 'already_resolved' };
 
-    const placeholderPassword = crypto.randomBytes(24).toString('hex');
-    const passwordHash = await bcrypt.hash(placeholderPassword, 10);
-
-    try {
-      await this.prisma.$transaction([
-        this.prisma.user.create({
-          data: {
-            username: entry.fineractUsername,
-            clientId: entry.suggestedClientId,
-            passwordHash,
-            role: 'DIRECTOR',
-          },
-        }),
-        this.prisma.pendingOnboarding.update({
-          where: { id: entry.id },
-          data: {
-            status: 'RESOLVED',
-            resolvedAt: new Date(),
-            resolvedClientId: entry.suggestedClientId,
-            confirmToken: null,
-          },
-        }),
-      ]);
-    } catch (error) {
-      if (
-        error &&
-        typeof error === 'object' &&
-        'code' in error &&
-        error.code === 'P2002'
-      ) {
-        // Concurrent confirm won the race between our check above and this
-        // write. Re-fetch so the message is accurate either way.
-        const raceWinner = await this.prisma.user.findUnique({
-          where: { clientId: entry.suggestedClientId },
-        });
-        return {
-          outcome: 'already_mapped',
-          existingUsername: raceWinner?.username ?? '(unknown)',
-          clientId: entry.suggestedClientId,
-        };
-      }
-      throw error;
-    }
-
-    return {
-      outcome: 'confirmed',
-      username: entry.fineractUsername,
-      clientId: entry.suggestedClientId,
-    };
+    return this.createMappingRow(entry.id, entry.fineractUsername, clientId, false);
   }
 }
