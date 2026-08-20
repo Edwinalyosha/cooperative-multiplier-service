@@ -4,6 +4,7 @@ import { JwtModule } from '@nestjs/jwt';
 import { PassportModule } from '@nestjs/passport';
 import { Redis } from 'ioredis';
 import { PrismaModule } from '../prisma/prisma.module';
+import { FineractModule } from '../fineract/fineract.module';
 import { MobileAuthController } from './mobile-auth.controller';
 import { MobileAuthService } from './mobile-auth.service';
 import { MobileJwtStrategy } from './strategies/mobile-jwt.strategy';
@@ -11,7 +12,13 @@ import { MobileJwtGuard } from './guards/mobile-jwt.guard';
 import { RolesGuard } from './guards/roles.guard';
 
 @Module({
-  imports: [ConfigModule, PassportModule, JwtModule.register({}), PrismaModule],
+  imports: [
+    ConfigModule,
+    PassportModule,
+    JwtModule.register({}),
+    PrismaModule,
+    FineractModule,
+  ],
   controllers: [MobileAuthController],
   providers: [
     MobileAuthService,

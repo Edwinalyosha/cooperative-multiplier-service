@@ -7,6 +7,7 @@ import {
 import { ConfigService } from '@nestjs/config';
 import { firstValueFrom } from 'rxjs';
 import {
+  FineractAuthResult,
   FineractClient,
   FineractClientListResponse,
   FineractClientAccountsResponse,
@@ -91,6 +92,63 @@ export class FineractService {
       'July', 'August', 'September', 'October', 'November', 'December',
     ];
     return `${date.getDate()} ${months[date.getMonth()]} ${date.getFullYear()}`;
+  }
+
+  /**
+   * Validates end-user credentials against Fineract's own login (hybrid
+   * auth — ONBOARDING-AND-AUTH-PLAN.md step 3). Deliberately NOT using
+   * this.auth (the static admin service account) — this call validates
+   * the exact username/password being checked, on behalf of the person
+   * logging in.
+   *
+   * Credentials go in a JSON BODY, not URL query params or Basic Auth —
+   * this Fineract instance rejects the classic query-param approach with
+   * "Invalid JSON in BODY (no longer URL param; see FINERACT-726)".
+   * Found live 2026-08-20 the hard way: query-param requests with a WRONG
+   * password returned a clean 401 (fails before reaching the body-parsing
+   * code), but the CORRECT password reached further into
+   * AuthenticationApiResource.authenticate() and 500'd trying to parse a
+   * body we never sent — which is what actually confirmed the password
+   * was right all along, not a red herring.
+   *
+   * Returns null for invalid credentials (401) so callers can't
+   * distinguish "wrong password" from "network hiccup" by exception type
+   * alone — but a genuine non-auth failure (Fineract unreachable, 5xx)
+   * is logged and rethrown rather than silently treated as bad
+   * credentials, so an outage doesn't look identical to a wrong password.
+   */
+  async authenticateUser(
+    username: string,
+    password: string,
+  ): Promise<FineractAuthResult | null> {
+    if (!this.isConfigured()) return null;
+    const url = `${this.baseUrl}/authentication`;
+    try {
+      const { data } = await firstValueFrom(
+        this.http.post<FineractAuthResult>(
+          url,
+          { username, password },
+          {
+            headers: {
+              'Fineract-Platform-TenantId':
+                this.config.get<string>('fineract.tenantId') ?? 'default',
+              Accept: 'application/json',
+              'Content-Type': 'application/json',
+            },
+            timeout: 15_000,
+          },
+        ),
+      );
+      return data?.authenticated ? data : null;
+    } catch (error) {
+      const status = (error as { response?: { status?: number } })?.response
+        ?.status;
+      if (status === 401 || status === 400) {
+        return null;
+      }
+      this.logger.error('Fineract authentication call failed (non-401)', error);
+      throw error;
+    }
   }
 
   async getClient(clientId: number): Promise<FineractClient | null> {

@@ -1,3 +1,15 @@
+/** Fineract's own POST /authentication response. Note: no clientId here —
+ * Fineract Users (admin/staff logins) are not tied to Clients (member
+ * records) at all; that mapping only exists in our own User table. See
+ * ONBOARDING-AND-AUTH-PLAN.md. */
+export interface FineractAuthResult {
+  username: string;
+  userId: number;
+  authenticated: boolean;
+  roles?: Array<{ id: number; name: string }>;
+  officeId?: number;
+}
+
 export interface FineractSavingsAccountSummary {
   id: number;
   accountNo?: string;

@@ -1,11 +1,10 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { JwtService } from '@nestjs/jwt';
 import { ConfigService } from '@nestjs/config';
-import { HttpService } from '@nestjs/axios';
 import { UnauthorizedException, ServiceUnavailableException } from '@nestjs/common';
-import { of, throwError } from 'rxjs';
-import { AxiosError, AxiosResponse } from 'axios';
 import { MobileAuthService } from './mobile-auth.service';
+import { PrismaService } from '../prisma/prisma.service';
+import { FineractService } from '../fineract/fineract.service';
 
 const mockRedis = {
   set: jest.fn(),
@@ -13,13 +12,17 @@ const mockRedis = {
   del: jest.fn(),
 };
 
-const mockHttp = { post: jest.fn() } as unknown as HttpService;
+const mockPrisma = {
+  user: { findUnique: jest.fn() },
+} as unknown as PrismaService;
+
+const mockFineract = {
+  authenticateUser: jest.fn(),
+} as unknown as FineractService;
 
 const mockConfig = {
   get: jest.fn((key: string) => {
     const map: Record<string, unknown> = {
-      'fineract.baseUrl': 'http://fineract.test',
-      'fineract.tenantId': 'test',
       'jwt.accessSecret': 'test-secret',
       'jwt.accessExpiresIn': '15m',
       'jwt.refreshTtlSeconds': 604800,
@@ -32,39 +35,45 @@ const mockJwt = {
   sign: jest.fn().mockReturnValue('mock.jwt.token'),
 } as unknown as JwtService;
 
-const fineractSuccessResponse: AxiosResponse = {
-  data: {
-    userId: 42,
-    username: 'john.doe',
-    displayName: 'John Doe',
-    officeId: 1,
-    authenticated: true,
-  },
-  status: 200,
-  statusText: 'OK',
-  headers: {},
-  config: {} as any,
+const fineractAuthSuccess = {
+  userId: 42,
+  username: 'john.doe',
+  authenticated: true,
+  roles: [{ id: 4, name: 'Director' }],
 };
 
-describe('MobileAuthService — loginMobile()', () => {
+const mappedUser = {
+  id: 1,
+  username: 'john.doe',
+  role: 'DIRECTOR' as const,
+  clientId: 1,
+};
+
+async function buildService() {
+  const module: TestingModule = await Test.createTestingModule({
+    providers: [
+      MobileAuthService,
+      { provide: 'MOBILE_AUTH_REDIS', useValue: mockRedis },
+      { provide: PrismaService, useValue: mockPrisma },
+      { provide: FineractService, useValue: mockFineract },
+      { provide: ConfigService, useValue: mockConfig },
+      { provide: JwtService, useValue: mockJwt },
+    ],
+  }).compile();
+  return module.get<MobileAuthService>(MobileAuthService);
+}
+
+describe('MobileAuthService — loginMobile() (hybrid auth: Fineract identity + local User authorization)', () => {
   let service: MobileAuthService;
 
   beforeEach(async () => {
     jest.clearAllMocks();
-    const module: TestingModule = await Test.createTestingModule({
-      providers: [
-        MobileAuthService,
-        { provide: 'MOBILE_AUTH_REDIS', useValue: mockRedis },
-        { provide: HttpService, useValue: mockHttp },
-        { provide: ConfigService, useValue: mockConfig },
-        { provide: JwtService, useValue: mockJwt },
-      ],
-    }).compile();
-    service = module.get<MobileAuthService>(MobileAuthService);
+    service = await buildService();
   });
 
-  it('returns accessToken, refreshToken, expiresIn, user on success', async () => {
-    (mockHttp.post as jest.Mock).mockReturnValue(of(fineractSuccessResponse));
+  it('returns accessToken, refreshToken, expiresIn, user when Fineract auth succeeds and a mapping row exists', async () => {
+    (mockFineract.authenticateUser as jest.Mock).mockResolvedValue(fineractAuthSuccess);
+    (mockPrisma.user.findUnique as jest.Mock).mockResolvedValue(mappedUser);
     mockRedis.set.mockResolvedValue('OK');
 
     const result = await service.loginMobile({ username: 'john.doe', password: 'secret' });
@@ -75,44 +84,51 @@ describe('MobileAuthService — loginMobile()', () => {
     );
     expect(result.expiresIn).toBe(900);
     expect(result.user).toEqual({
-      id: 42,
+      id: 1,
       username: 'john.doe',
-      displayName: 'John Doe',
-      officeId: 1,
+      role: 'DIRECTOR',
+      clientId: 1,
     });
   });
 
-  it('stores refresh token in Redis with 7-day TTL', async () => {
-    (mockHttp.post as jest.Mock).mockReturnValue(of(fineractSuccessResponse));
+  it('stores refresh token in Redis with 7-day TTL, keyed on the local User row (not Fineract userId)', async () => {
+    (mockFineract.authenticateUser as jest.Mock).mockResolvedValue(fineractAuthSuccess);
+    (mockPrisma.user.findUnique as jest.Mock).mockResolvedValue(mappedUser);
     mockRedis.set.mockResolvedValue('OK');
 
     const result = await service.loginMobile({ username: 'john.doe', password: 'secret' });
 
     expect(mockRedis.set).toHaveBeenCalledWith(
       `mobile_refresh:${result.refreshToken}`,
-      JSON.stringify({ userId: 42, username: 'john.doe', displayName: 'John Doe', officeId: 1 }),
+      JSON.stringify({ userId: 1, username: 'john.doe', role: 'DIRECTOR', clientId: 1 }),
       'EX',
       604800,
     );
   });
 
-  it('throws UnauthorizedException on Fineract 401', async () => {
-    const err = new AxiosError('Unauthorized', '401');
-    (err as any).response = { status: 401 };
-    (mockHttp.post as jest.Mock).mockReturnValue(throwError(() => err));
+  it('throws UnauthorizedException(INVALID_CREDENTIALS) when Fineract rejects the password', async () => {
+    (mockFineract.authenticateUser as jest.Mock).mockResolvedValue(null);
 
     await expect(
       service.loginMobile({ username: 'wrong', password: 'wrong' }),
     ).rejects.toThrow(UnauthorizedException);
+    expect(mockPrisma.user.findUnique).not.toHaveBeenCalled();
   });
 
-  it('throws ServiceUnavailableException on Fineract timeout', async () => {
-    (mockHttp.post as jest.Mock).mockReturnValue(
-      throwError(() => new Error('timeout')),
-    );
+  it('throws UnauthorizedException(NOT_ONBOARDED) when Fineract accepts the login but no local mapping row exists', async () => {
+    (mockFineract.authenticateUser as jest.Mock).mockResolvedValue(fineractAuthSuccess);
+    (mockPrisma.user.findUnique as jest.Mock).mockResolvedValue(null);
 
     await expect(
-      service.loginMobile({ username: 'john', password: 'pass' }),
+      service.loginMobile({ username: 'john.doe', password: 'secret' }),
+    ).rejects.toThrow(UnauthorizedException);
+  });
+
+  it('throws ServiceUnavailableException when Fineract itself is unreachable, distinct from a bad password', async () => {
+    (mockFineract.authenticateUser as jest.Mock).mockRejectedValue(new Error('timeout'));
+
+    await expect(
+      service.loginMobile({ username: 'john.doe', password: 'secret' }),
     ).rejects.toThrow(ServiceUnavailableException);
   });
 });
@@ -122,21 +138,12 @@ describe('MobileAuthService — refreshTokens()', () => {
 
   beforeEach(async () => {
     jest.clearAllMocks();
-    const module: TestingModule = await Test.createTestingModule({
-      providers: [
-        MobileAuthService,
-        { provide: 'MOBILE_AUTH_REDIS', useValue: mockRedis },
-        { provide: HttpService, useValue: mockHttp },
-        { provide: ConfigService, useValue: mockConfig },
-        { provide: JwtService, useValue: mockJwt },
-      ],
-    }).compile();
-    service = module.get<MobileAuthService>(MobileAuthService);
+    service = await buildService();
   });
 
   it('returns new token pair when refresh token is valid', async () => {
     const storedData = JSON.stringify({
-      userId: 42, username: 'john.doe', displayName: 'John Doe', officeId: 1,
+      userId: 1, username: 'john.doe', role: 'DIRECTOR', clientId: 1,
     });
     mockRedis.get.mockResolvedValue(storedData);
     mockRedis.del.mockResolvedValue(1);
@@ -150,7 +157,7 @@ describe('MobileAuthService — refreshTokens()', () => {
 
   it('deletes old Redis key on refresh (token rotation)', async () => {
     const storedData = JSON.stringify({
-      userId: 42, username: 'john.doe', displayName: 'John Doe', officeId: 1,
+      userId: 1, username: 'john.doe', role: 'DIRECTOR', clientId: 1,
     });
     mockRedis.get.mockResolvedValue(storedData);
     mockRedis.del.mockResolvedValue(1);
@@ -175,16 +182,7 @@ describe('MobileAuthService — logout()', () => {
 
   beforeEach(async () => {
     jest.clearAllMocks();
-    const module: TestingModule = await Test.createTestingModule({
-      providers: [
-        MobileAuthService,
-        { provide: 'MOBILE_AUTH_REDIS', useValue: mockRedis },
-        { provide: HttpService, useValue: mockHttp },
-        { provide: ConfigService, useValue: mockConfig },
-        { provide: JwtService, useValue: mockJwt },
-      ],
-    }).compile();
-    service = module.get<MobileAuthService>(MobileAuthService);
+    service = await buildService();
   });
 
   it('deletes the refresh token key from Redis', async () => {
