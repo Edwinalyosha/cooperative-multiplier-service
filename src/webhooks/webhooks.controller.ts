@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   Body,
   Controller,
   Get,
@@ -10,6 +11,7 @@ import {
   UseGuards,
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
+import { UserRole } from '@prisma/client';
 import type { Response } from 'express';
 import { WebhooksService } from './webhooks.service';
 import { FineractWebhookDto } from './dto/fineract-event.dto';
@@ -82,11 +84,12 @@ export class WebhooksController {
   }
 
   @Get('fineract/pending-onboarding')
+  @UseGuards(ApiKeyGuard)
+  @ApiBearerAuth()
   @ApiOperation({
     summary:
-      'List pending onboarding entries captured from Fineract User-create ' +
-      'events. Discovery/debugging endpoint — NOT yet admin-gated, do not ' +
-      'expose beyond this dev/testing phase.',
+      'Admin-only: list pending onboarding entries captured from Fineract ' +
+      'User-create events, for the onboarding tool.',
   })
   listPendingOnboarding() {
     return this.webhooksService.listPendingOnboarding();
@@ -155,8 +158,7 @@ export class WebhooksController {
           res,
           'Confirmed',
           `<p>Login mapping created for <strong>${result.username}</strong> → Fineract Client ${result.clientId}. ` +
-            `Note: this account can't log in yet — the hybrid Fineract-based auth switch isn't built yet ` +
-            `(ONBOARDING-AND-AUTH-PLAN.md step 3). It'll start working once that ships.</p>`,
+            `They can log in to director-webapp now using their Fineract username and password.</p>`,
         );
       case 'not_found':
         return renderHtmlPage(res, 'Link not valid', '<p>This confirmation link is invalid.</p>', 404);
@@ -186,13 +188,26 @@ export class WebhooksController {
   @ApiOperation({
     summary:
       'Admin-only: manually resolve a PendingOnboarding entry by picking ' +
-      'the clientId by hand. For the zero/multiple-Fineract-email-match ' +
-      'cases, which never get an auto-suggested confirm link.',
+      'the clientId and role by hand. For zero/multiple-Fineract-email-' +
+      'match cases (no auto-suggested confirm link), and for any ' +
+      'Finance Manager onboarding — the auto-confirm email path is ' +
+      'scoped to Director only, so Finance Manager always comes through ' +
+      'here.',
   })
   manualResolve(
     @Param('id', ParseIntPipe) id: number,
     @Body('clientId', ParseIntPipe) clientId: number,
+    @Body('role') role: string,
   ) {
-    return this.webhooksService.manualResolveOnboarding(id, clientId);
+    if (!Object.values(UserRole).includes(role as UserRole)) {
+      throw new BadRequestException(
+        `role must be one of: ${Object.values(UserRole).join(', ')}`,
+      );
+    }
+    return this.webhooksService.manualResolveOnboarding(
+      id,
+      clientId,
+      role as UserRole,
+    );
   }
 }

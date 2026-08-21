@@ -1,5 +1,5 @@
 import { Injectable, Logger } from '@nestjs/common';
-import { Prisma } from '@prisma/client';
+import { Prisma, UserRole } from '@prisma/client';
 import * as crypto from 'crypto';
 import * as bcrypt from 'bcrypt';
 import { MultiplierService } from '../multiplier/multiplier.service';
@@ -226,6 +226,7 @@ export class WebhooksService {
     entryId: number,
     username: string,
     clientId: number,
+    role: UserRole,
     clearToken: boolean,
   ): Promise<
     | { outcome: 'confirmed'; username: string; clientId: number }
@@ -248,7 +249,7 @@ export class WebhooksService {
     try {
       await this.prisma.$transaction([
         this.prisma.user.create({
-          data: { username, clientId, passwordHash, role: 'DIRECTOR' },
+          data: { username, clientId, passwordHash, role },
         }),
         this.prisma.pendingOnboarding.update({
           where: { id: entryId },
@@ -310,10 +311,16 @@ export class WebhooksService {
       return { outcome: 'not_found' };
     }
 
+    // Auto-confirm (email-match) path is scoped to Director onboarding
+    // only — the original discussion that shaped this pipeline explicitly
+    // limited it to Director, not Finance Manager or other roles. Finance
+    // Manager (and anything else) goes through manualResolveOnboarding
+    // below, where an admin picks the role explicitly.
     return this.createMappingRow(
       entry.id,
       entry.fineractUsername,
       entry.suggestedClientId,
+      'DIRECTOR',
       true,
     );
   }
@@ -321,12 +328,14 @@ export class WebhooksService {
   /**
    * Admin-only (ApiKeyGuard, same convention as POST /auth/users) manual
    * resolution for entries that never got an auto-match confirm link —
-   * zero or multiple Fineract Client email matches. Lets an admin pick the
-   * correct clientId by hand instead of the entry sitting stuck forever.
+   * zero/multiple Fineract Client email matches, OR a role other than
+   * Director (Finance Manager onboarding always goes through here, never
+   * the auto-confirm path — see confirmOnboarding's comment).
    */
   async manualResolveOnboarding(
     id: number,
     clientId: number,
+    role: UserRole,
   ): Promise<
     | { outcome: 'confirmed'; username: string; clientId: number }
     | { outcome: 'already_mapped'; existingUsername: string; clientId: number }
@@ -339,6 +348,12 @@ export class WebhooksService {
     if (!entry || !entry.fineractUsername) return { outcome: 'not_found' };
     if (entry.status !== 'PENDING') return { outcome: 'already_resolved' };
 
-    return this.createMappingRow(entry.id, entry.fineractUsername, clientId, false);
+    return this.createMappingRow(
+      entry.id,
+      entry.fineractUsername,
+      clientId,
+      role,
+      false,
+    );
   }
 }

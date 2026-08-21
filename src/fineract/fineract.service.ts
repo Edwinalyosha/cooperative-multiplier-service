@@ -164,25 +164,37 @@ export class FineractService {
   /**
    * Looks up Fineract Clients by exact email match, for the onboarding
    * flow's clientId-suggestion step (see ONBOARDING-AND-AUTH-PLAN.md and
-   * PendingOnboarding). Uses Fineract's `sqlSearch` list parameter — a raw
-   * SQL WHERE-clause fragment against m_client, a documented but low-level
-   * Fineract feature. Single quotes in the input are escaped, but this is
-   * still string-built SQL rather than a parameterized query; only ever
-   * called with email addresses captured from a Fineract-admin-only Create
-   * User form, not arbitrary end-user input.
+   * PendingOnboarding) — this feeds a security-relevant "exactly one
+   * match = safe to auto-suggest" decision, so exactness genuinely
+   * matters here.
    *
-   * Unverified against this specific Fineract instance as of 2026-08-19 —
-   * first live call should be treated as a test of this method too, not
-   * just the onboarding flow around it.
+   * ORIGINALLY used Fineract's `sqlSearch` list parameter (a raw SQL
+   * WHERE-clause fragment) — REPLACED 2026-08-20 after finding live that
+   * it does NOT do an exact `email_address = X` filter as its name
+   * suggests. Confirmed directly: a Client with `emailAddress: null`
+   * (John Doe) matched a `sqlSearch` query for a completely different,
+   * unrelated email string. Whatever `sqlSearch` actually does under the
+   * hood on this Fineract version, it's not literal/exact, which made
+   * the "exactly one match" safety check untrustworthy — a false single
+   * match could have silently offered the wrong Client.
+   *
+   * Fixed by not trusting Fineract's own filtering at all: fetch clients
+   * and do the exact-match comparison ourselves, in code we control.
+   * `limit=1000` is a stopgap, not real pagination — fine while this
+   * Fineract instance holds a handful of Clients, but will silently miss
+   * matches past that count if the member base grows. Revisit with
+   * proper pagination before that becomes a real gap.
    */
   async searchClientsByEmail(email: string): Promise<FineractClient[]> {
     if (!this.isConfigured()) return [];
-    const escaped = email.replace(/'/g, "''");
+    const normalizedEmail = email.trim().toLowerCase();
     try {
       const result = await this.get<FineractClientListResponse>(
-        `/clients?sqlSearch=${encodeURIComponent(`email_address='${escaped}'`)}`,
+        `/clients?limit=1000`,
       );
-      return result.pageItems ?? [];
+      return (result.pageItems ?? []).filter(
+        (c) => c.emailAddress?.trim().toLowerCase() === normalizedEmail,
+      );
     } catch (error) {
       this.logger.error(`Failed to search clients by email`, error);
       return [];
