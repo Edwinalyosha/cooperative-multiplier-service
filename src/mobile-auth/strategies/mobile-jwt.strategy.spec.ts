@@ -1,4 +1,5 @@
 import { ConfigService } from '@nestjs/config';
+import { UserRole } from '@prisma/client';
 import { MobileJwtStrategy, MobileJwtPayload } from './mobile-jwt.strategy';
 
 const mockConfig = {
@@ -19,25 +20,31 @@ describe('MobileJwtStrategy', () => {
     const payload: MobileJwtPayload = {
       sub: 42,
       username: 'john.doe',
-      displayName: 'John Doe',
-      officeId: 1,
+      role: UserRole.DIRECTOR,
+      clientId: 7,
       iat: 1000000,
       exp: 9999999999,
     };
     expect(strategy.validate(payload)).toEqual(payload);
   });
 
-  it('validate() preserves all payload fields', () => {
+  // role and clientId are the authorization-bearing fields: controllers read
+  // them off req.user to decide what the caller may see and do, rather than
+  // trusting anything in the request body or URL. If validate() ever dropped
+  // or altered them, every ownership check downstream would silently fail
+  // open, so assert them explicitly rather than relying on toEqual above.
+  it('validate() preserves the authorization fields', () => {
     const payload: MobileJwtPayload = {
       sub: 1,
       username: 'user',
-      displayName: 'User',
-      officeId: 2,
+      role: UserRole.FINANCE_MANAGER,
+      clientId: null,
       iat: 0,
       exp: 9999999999,
     };
     const result = strategy.validate(payload);
     expect(result.sub).toBe(1);
-    expect(result.officeId).toBe(2);
+    expect(result.role).toBe(UserRole.FINANCE_MANAGER);
+    expect(result.clientId).toBeNull();
   });
 });
