@@ -179,13 +179,35 @@ export class MultiplierService {
       return existing;
     }
 
-    return this.prisma.directorMultiplier.create({
-      data: {
-        clientId,
-        currentMultiplier: DEFAULT_MULTIPLIER,
-        loanMultiple: this.calculateLoanMultiple(DEFAULT_MULTIPLIER),
-      },
-    });
+    try {
+      return await this.prisma.directorMultiplier.create({
+        data: {
+          clientId,
+          currentMultiplier: DEFAULT_MULTIPLIER,
+          loanMultiple: this.calculateLoanMultiple(DEFAULT_MULTIPLIER),
+        },
+      });
+    } catch (error) {
+      // Race: a first-ever dashboard load fires several endpoints in
+      // parallel (mobile.service.ts's Promise.all), each independently
+      // calling ensureDirector for the same brand-new clientId — the
+      // find-then-create above isn't atomic, so two calls can both see
+      // "not found" and both try to create. Found live 2026-08-21: the
+      // loser hit this exact unique-constraint error instead of just
+      // getting the winner's row. Whoever won, re-fetch and use that.
+      if (
+        error &&
+        typeof error === 'object' &&
+        'code' in error &&
+        error.code === 'P2002'
+      ) {
+        const winner = await this.prisma.directorMultiplier.findUnique({
+          where: { clientId },
+        });
+        if (winner) return winner;
+      }
+      throw error;
+    }
   }
 
   async getProfile(clientId: number): Promise<DirectorProfileResponse> {
