@@ -120,10 +120,28 @@ const PUBLIC: [string, string][] = [
 
 const REJECTED = [401, 403];
 
+const WEBHOOK_TEST_SECRET = 'auth-matrix-test-secret';
+
+/** The six Fineract receivers n8n calls, which authenticate by shared secret. */
+const WEBHOOK_RECEIVERS: [string, string][] = [
+  ['post', '/webhooks/fineract/contribution/on-time'],
+  ['post', '/webhooks/fineract/contribution/late'],
+  ['post', '/webhooks/fineract/repayment/on-time'],
+  ['post', '/webhooks/fineract/repayment/late'],
+  ['post', '/webhooks/fineract/loan/early-payoff'],
+  ['post', '/webhooks/fineract/user/create'],
+];
+
 describe('Auth matrix (e2e)', () => {
   let app: INestApplication<App>;
 
   beforeAll(async () => {
+    // WebhookSecretGuard fails CLOSED (503) when unconfigured, which is the
+    // right production behaviour but would mask the distinction this suite
+    // cares about. Setting it here mirrors production and exercises the real
+    // rejection path: 401 for a missing or wrong secret.
+    process.env.WEBHOOK_SHARED_SECRET = WEBHOOK_TEST_SECRET;
+
     const moduleFixture: TestingModule = await Test.createTestingModule({
       imports: [AppModule],
     })
@@ -184,6 +202,33 @@ describe('Auth matrix (e2e)', () => {
       },
       30_000,
     );
+  });
+
+  // The block above proves the webhook receivers reject strangers. This
+  // proves they still admit n8n — otherwise "secure" would just mean
+  // "onboarding is broken", and the failure would only surface when a real
+  // member's Fineract account was created.
+  describe('webhook receivers admit a caller holding the shared secret', () => {
+    it.each(WEBHOOK_RECEIVERS)(
+      '%s %s → not rejected when the secret is presented',
+      async (method, path) => {
+        const res = await request(app.getHttpServer())
+          [method](path)
+          .set('x-webhook-secret', WEBHOOK_TEST_SECRET)
+          .send({});
+        expect(REJECTED).not.toContain(res.status);
+      },
+      30_000,
+    );
+
+    it('rejects a secret of the correct length but wrong content', async () => {
+      const wrong = 'x'.repeat(WEBHOOK_TEST_SECRET.length);
+      const res = await request(app.getHttpServer())
+        .post('/webhooks/fineract/user/create')
+        .set('x-webhook-secret', wrong)
+        .send({});
+      expect(REJECTED).toContain(res.status);
+    });
   });
 
   // Guards against the failure mode this file exists to prevent: a new

@@ -37,6 +37,15 @@ export default () => ({
       .map((o) => o.trim())
       .filter(Boolean),
   },
+  webhooks: {
+    /**
+     * Shared secret n8n presents on the Fineract webhook receivers.
+     * DELIBERATELY has no fallback: an unset secret must fail closed (see
+     * WebhookSecretGuard), never silently accept a value that anyone who has
+     * read this repository already knows.
+     */
+    sharedSecret: process.env.WEBHOOK_SHARED_SECRET,
+  },
   jwt: {
     accessSecret:
       process.env.JWT_ACCESS_SECRET ?? 'dev-jwt-secret-change-in-prod',

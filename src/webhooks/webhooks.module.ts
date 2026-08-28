@@ -6,10 +6,11 @@ import { QueueModule } from '../queue/queue.module';
 import { PrismaModule } from '../prisma/prisma.module';
 import { FineractModule } from '../fineract/fineract.module';
 import { AuthModule } from '../auth/auth.module';
+import { WebhookSecretGuard } from './guards/webhook-secret.guard';
 
 @Module({
   imports: [MultiplierModule, QueueModule, PrismaModule, FineractModule, AuthModule],
   controllers: [WebhooksController],
-  providers: [WebhooksService],
+  providers: [WebhooksService, WebhookSecretGuard],
 })
 export class WebhooksModule {}

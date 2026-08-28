@@ -16,6 +16,7 @@ import type { Response } from 'express';
 import { WebhooksService } from './webhooks.service';
 import { FineractWebhookDto } from './dto/fineract-event.dto';
 import { ApiKeyGuard } from '../auth/guards/api-key.guard';
+import { WebhookSecretGuard } from './guards/webhook-secret.guard';
 
 /** Shared HTML page renderer for both the preview (GET) and result (POST)
  * steps of the onboarding confirm flow — kept as one small helper so both
@@ -42,42 +43,68 @@ function renderHtmlPage(
 export class WebhooksController {
   constructor(private readonly webhooksService: WebhooksService) {}
 
+  // Every receiver below mutates a member's multiplier, which sets both their
+  // interest rate and their borrowing limit. They were unauthenticated until
+  // 2026-08-24 — anyone on the internet could move any member's standing in
+  // either direction. Verified against m_hook_registered_events that only
+  // USER/CREATE is registered in Fineract, so nothing legitimate was calling
+  // the other five.
   @Post('fineract/contribution/on-time')
+  @UseGuards(WebhookSecretGuard)
   @ApiOperation({ summary: 'Fineract callback: on-time contribution' })
   contributionOnTime(@Body() dto: FineractWebhookDto) {
     return this.webhooksService.handleContributionOnTime(dto);
   }
 
   @Post('fineract/contribution/late')
+  @UseGuards(WebhookSecretGuard)
   @ApiOperation({ summary: 'Fineract callback: late contribution' })
   contributionLate(@Body() dto: FineractWebhookDto) {
     return this.webhooksService.handleContributionLate(dto);
   }
 
   @Post('fineract/repayment/on-time')
+  @UseGuards(WebhookSecretGuard)
   @ApiOperation({ summary: 'Fineract callback: on-time repayment' })
   repaymentOnTime(@Body() dto: FineractWebhookDto) {
     return this.webhooksService.handleRepaymentOnTime(dto);
   }
 
   @Post('fineract/repayment/late')
+  @UseGuards(WebhookSecretGuard)
   @ApiOperation({ summary: 'Fineract callback: late repayment' })
   repaymentLate(@Body() dto: FineractWebhookDto) {
     return this.webhooksService.handleRepaymentLate(dto);
   }
 
   @Post('fineract/loan/early-payoff')
+  @UseGuards(WebhookSecretGuard)
   @ApiOperation({ summary: 'Fineract callback: early loan payoff' })
   earlyPayoff(@Body() dto: FineractWebhookDto) {
     return this.webhooksService.handleEarlyPayoff(dto);
   }
 
+  /**
+   * P0-0. This returns a single-use confirm token in its response body, and
+   * that token maps a caller-supplied username onto any not-yet-onboarded
+   * member's clientId. Unauthenticated, it was an identity-hijack primitive:
+   * POST with your own Fineract username and a colleague's email address,
+   * follow the returned link, and your login now owns their clientId — their
+   * savings balance, their borrowing limit, their loan applications.
+   *
+   * Only unmapped clientIds were exploitable (`already_mapped` blocks the
+   * rest), which is exactly every member during a bulk onboarding.
+   *
+   * Restricted to n8n by shared secret. Returning the token to a caller who
+   * has proven it is n8n is fine — n8n is what needs it to send the email.
+   */
   @Post('fineract/user/create')
+  @UseGuards(WebhookSecretGuard)
   @ApiOperation({
     summary:
-      'Fineract hook (via n8n): User created. Payload shape unconfirmed as of ' +
-      '2026-08-19 — captured into PendingOnboarding for discovery, not yet ' +
-      'auto-resolved to a mapping row. See ONBOARDING-AND-AUTH-PLAN.md.',
+      'Fineract hook (via n8n): User created. Captured into PendingOnboarding ' +
+      'and, on an exact single email match against Fineract Clients, issued a ' +
+      'single-use 72h confirm token. Requires the webhook shared secret.',
   })
   fineractUserCreate(@Body() rawPayload: Record<string, unknown>) {
     return this.webhooksService.captureFineractUserCreate(rawPayload);
