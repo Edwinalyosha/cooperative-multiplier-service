@@ -3,7 +3,7 @@ import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { AuthService } from './auth.service';
 import { LoginDto } from './dto/login.dto';
 import { CreateUserDto } from './dto/create-user.dto';
-import { ApiKeyGuard } from './guards/api-key.guard';
+import { AdminApiKeyGuard } from './guards/api-key.guard';
 import { Public } from './decorators/public.decorator';
 
 @ApiTags('auth')
@@ -27,9 +27,9 @@ export class AuthController {
     return { valid };
   }
 
-  @Public() // opts out of JWT; ApiKeyGuard below is its auth
+  @Public() // opts out of JWT; AdminApiKeyGuard below is its auth
   @Post('users')
-  @UseGuards(ApiKeyGuard)
+  @UseGuards(AdminApiKeyGuard)
   @ApiBearerAuth()
   @ApiOperation({
     summary:
@@ -39,9 +39,9 @@ export class AuthController {
     return this.authService.createUser(dto);
   }
 
-  @Public() // opts out of JWT; ApiKeyGuard below is its auth
+  @Public() // opts out of JWT; AdminApiKeyGuard below is its auth
   @Get('users')
-  @UseGuards(ApiKeyGuard)
+  @UseGuards(AdminApiKeyGuard)
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Admin-only: list workflow logins' })
   listUsers() {

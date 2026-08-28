@@ -7,7 +7,7 @@ import {
   UseGuards,
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
-import { ApiKeyGuard } from '../auth/guards/api-key.guard';
+import { ReportsApiKeyGuard } from '../auth/guards/api-key.guard';
 import { Public } from '../auth/decorators/public.decorator';
 import { ReportsService } from './reports.service';
 import { AuditQueryDto } from './dto/audit-query.dto';
@@ -15,8 +15,8 @@ import { ReportRangeDto } from './dto/report-range.dto';
 
 @ApiTags('reports')
 @ApiBearerAuth()
-@Public() // class-level: opts out of JWT; ApiKeyGuard is this module's auth
-@UseGuards(ApiKeyGuard)
+@Public() // class-level: opts out of JWT; ReportsApiKeyGuard is this module's auth
+@UseGuards(ReportsApiKeyGuard)
 @Controller('reports')
 export class ReportsController {
   constructor(private readonly reportsService: ReportsService) {}

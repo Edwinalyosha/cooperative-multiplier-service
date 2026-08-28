@@ -37,6 +37,27 @@ export default () => ({
       .map((o) => o.trim())
       .filter(Boolean),
   },
+  /**
+   * Static API credentials for the machine-facing admin surfaces. Split into
+   * two scopes on 2026-08-24: a single key previously unlocked both
+   * identity operations and reporting, so anyone who needed a dashboard
+   * export also held the ability to mint a login mapped to any member's
+   * clientId and role.
+   *
+   * NONE of these have fallback values, deliberately. The previous defaults
+   * were 'admin' / 'changeme' / 'dev-api-key', all committed to this
+   * repository — anyone who read the source could have logged in and minted
+   * themselves an account. A secret with a default is indistinguishable from
+   * a real one at runtime: the service looks protected while being open.
+   */
+  api: {
+    username: process.env.API_USERNAME,
+    password: process.env.API_PASSWORD,
+    /** Identity operations: create/list logins, resolve onboarding. */
+    adminKey: process.env.ADMIN_API_KEY,
+    /** Read-only reporting. Safe to hand to an accountant or a dashboard. */
+    reportsKey: process.env.REPORTS_API_KEY,
+  },
   webhooks: {
     /**
      * Shared secret n8n presents on the Fineract webhook receivers.
@@ -47,8 +68,19 @@ export default () => ({
     sharedSecret: process.env.WEBHOOK_SHARED_SECRET,
   },
   jwt: {
-    accessSecret:
-      process.env.JWT_ACCESS_SECRET ?? 'dev-jwt-secret-change-in-prod',
+    /**
+     * No fallback. This previously defaulted to
+     * 'dev-jwt-secret-change-in-prod', a literal committed to this repo —
+     * had the env var ever been unset, anyone reading the source could have
+     * forged a token for any user, role, and clientId, walking through every
+     * guard in the application. (Verified set to a real 64-character value in
+     * production on 2026-08-24, so no forgery was ever possible.)
+     *
+     * Unlike the API keys, a missing JWT secret is fatal at boot rather than
+     * per-request: there is no safe degraded mode for a service that cannot
+     * verify its own tokens.
+     */
+    accessSecret: process.env.JWT_ACCESS_SECRET,
     accessExpiresIn: process.env.JWT_ACCESS_EXPIRES_IN ?? '15m',
     refreshTtlSeconds: parseInt(
       process.env.JWT_REFRESH_TTL_SECONDS ?? '604800',

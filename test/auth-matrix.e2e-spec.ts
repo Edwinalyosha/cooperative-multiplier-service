@@ -123,6 +123,26 @@ const PUBLIC: [string, string][] = [
 const REJECTED = [401, 403];
 
 const WEBHOOK_TEST_SECRET = 'auth-matrix-test-secret';
+const ADMIN_TEST_KEY = 'auth-matrix-admin-key';
+const REPORTS_TEST_KEY = 'auth-matrix-reports-key';
+
+/** Identity operations — the admin scope only. */
+const ADMIN_SCOPED: [string, string][] = [
+  ['post', '/auth/users'],
+  ['get', '/auth/users'],
+  ['get', '/webhooks/fineract/pending-onboarding'],
+  ['post', '/webhooks/fineract/pending-onboarding/1/resolve'],
+];
+
+/** Read-only reporting — satisfied by either key. */
+const REPORTS_SCOPED: [string, string][] = [
+  ['get', '/reports/dashboard'],
+  ['get', '/reports/audit'],
+  ['get', '/reports/clients'],
+  ['get', '/reports/clients/1'],
+  ['get', '/reports/eligibility'],
+  ['get', '/reports/events/summary'],
+];
 
 /** The six Fineract receivers n8n calls, which authenticate by shared secret. */
 const WEBHOOK_RECEIVERS: [string, string][] = [
@@ -143,6 +163,11 @@ describe('Auth matrix (e2e)', () => {
     // cares about. Setting it here mirrors production and exercises the real
     // rejection path: 401 for a missing or wrong secret.
     process.env.WEBHOOK_SHARED_SECRET = WEBHOOK_TEST_SECRET;
+    process.env.ADMIN_API_KEY = ADMIN_TEST_KEY;
+    process.env.REPORTS_API_KEY = REPORTS_TEST_KEY;
+    // Required: MobileJwtStrategy refuses to construct without it, so the
+    // app will not boot. That is deliberate — see the strategy's constructor.
+    process.env.JWT_ACCESS_SECRET ??= 'auth-matrix-test-jwt-secret-32-chars!';
 
     const moduleFixture: TestingModule = await Test.createTestingModule({
       imports: [AppModule],
@@ -231,6 +256,60 @@ describe('Auth matrix (e2e)', () => {
         .send({});
       expect(REJECTED).toContain(res.status);
     });
+  });
+
+  // The split exists so a reports key can be handed to an accountant or a
+  // dashboard without also conferring the ability to mint a login mapped to
+  // any member's clientId and role. These assertions are that promise.
+  describe('API key scopes are separated', () => {
+    it.each(ADMIN_SCOPED)(
+      '%s %s → REJECTS the reports key',
+      async (method, path) => {
+        const res = await request(app.getHttpServer())
+          [method](path)
+          .set('authorization', `Bearer ${REPORTS_TEST_KEY}`)
+          .send({});
+        expect(REJECTED).toContain(res.status);
+      },
+      30_000,
+    );
+
+    it.each(ADMIN_SCOPED)(
+      '%s %s → accepts the admin key',
+      async (method, path) => {
+        const res = await request(app.getHttpServer())
+          [method](path)
+          .set('authorization', `Bearer ${ADMIN_TEST_KEY}`)
+          .send({});
+        expect(REJECTED).not.toContain(res.status);
+      },
+      30_000,
+    );
+
+    it.each(REPORTS_SCOPED)(
+      '%s %s → accepts the reports key',
+      async (method, path) => {
+        const res = await request(app.getHttpServer())
+          [method](path)
+          .set('authorization', `Bearer ${REPORTS_TEST_KEY}`)
+          .send({});
+        expect(REJECTED).not.toContain(res.status);
+      },
+      30_000,
+    );
+
+    // Admin is a superset, so day-to-day administration needs one key, not two.
+    it.each(REPORTS_SCOPED)(
+      '%s %s → also accepts the admin key',
+      async (method, path) => {
+        const res = await request(app.getHttpServer())
+          [method](path)
+          .set('authorization', `Bearer ${ADMIN_TEST_KEY}`)
+          .send({});
+        expect(REJECTED).not.toContain(res.status);
+      },
+      30_000,
+    );
   });
 
   // Guards against the failure mode this file exists to prevent: a new

@@ -16,7 +16,7 @@ import { IS_PUBLIC_KEY } from '../../auth/decorators/public.decorator';
  * visible as an explicit @Public() that a reviewer can question.
  *
  * @Public() only switches off THIS guard. Route-level guards still run, so
- * endpoints carrying @UseGuards(ApiKeyGuard) or @UseGuards(WebhookSecretGuard)
+ * endpoints carrying @UseGuards(Admin/ReportsApiKeyGuard) or @UseGuards(WebhookSecretGuard)
  * are marked @Public() to opt out of JWT while keeping their own scheme.
  */
 @Injectable()

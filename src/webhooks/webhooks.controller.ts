@@ -15,7 +15,7 @@ import { UserRole } from '@prisma/client';
 import type { Response } from 'express';
 import { WebhooksService } from './webhooks.service';
 import { FineractWebhookDto } from './dto/fineract-event.dto';
-import { ApiKeyGuard } from '../auth/guards/api-key.guard';
+import { AdminApiKeyGuard } from '../auth/guards/api-key.guard';
 import { Public } from '../auth/decorators/public.decorator';
 import { WebhookSecretGuard } from './guards/webhook-secret.guard';
 
@@ -118,8 +118,8 @@ export class WebhooksController {
   }
 
   @Get('fineract/pending-onboarding')
-  @Public() // opts out of JWT; ApiKeyGuard below is its auth
-  @UseGuards(ApiKeyGuard)
+  @Public() // opts out of JWT; AdminApiKeyGuard below is its auth
+  @UseGuards(AdminApiKeyGuard)
   @ApiBearerAuth()
   @ApiOperation({
     summary:
@@ -220,8 +220,8 @@ export class WebhooksController {
   }
 
   @Post('fineract/pending-onboarding/:id/resolve')
-  @Public() // opts out of JWT; ApiKeyGuard below is its auth
-  @UseGuards(ApiKeyGuard)
+  @Public() // opts out of JWT; AdminApiKeyGuard below is its auth
+  @UseGuards(AdminApiKeyGuard)
   @ApiBearerAuth()
   @ApiOperation({
     summary:

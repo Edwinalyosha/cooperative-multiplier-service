@@ -1,8 +1,24 @@
-import { ConflictException, Injectable, UnauthorizedException } from '@nestjs/common';
+import {
+  ConflictException,
+  Injectable,
+  Logger,
+  ServiceUnavailableException,
+  UnauthorizedException,
+} from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
+import { timingSafeEqual } from 'crypto';
 import * as bcrypt from 'bcrypt';
 import { PrismaService } from '../prisma/prisma.service';
 import { LoginDto } from './dto/login.dto';
 import { CreateUserDto } from './dto/create-user.dto';
+
+/** See api-key.guard.ts for why comparisons here are constant-time. */
+function constantTimeEquals(provided: string, expected: string): boolean {
+  const a = Buffer.from(provided ?? '');
+  const b = Buffer.from(expected);
+  if (a.length !== b.length) return false;
+  return timingSafeEqual(a, b);
+}
 
 export interface AuthTokenResponse {
   accessToken: string;
@@ -14,37 +30,72 @@ const BCRYPT_ROUNDS = 12;
 
 @Injectable()
 export class AuthService {
-  constructor(private readonly prisma: PrismaService) {}
+  private readonly logger = new Logger(AuthService.name);
+
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly config: ConfigService,
+  ) {}
 
   /**
-   * Validates credentials against env-configured service users.
-   * This is the legacy admin/reports login (static API key) — left as-is.
-   * Per-person login for the loan-approval workflow lives in
+   * Legacy admin login: exchanges env-configured credentials for the static
+   * admin API key. Per-person login for the loan-approval workflow lives in
    * mobile-auth/mobile-auth.service.ts against the User table instead.
+   *
+   * All three values previously had fallbacks — 'admin' / 'changeme' /
+   * 'dev-api-key' — every one of them committed to this repository. Had the
+   * env vars been unset in production, anyone who read the source could have
+   * logged in here and received a key that mints logins mapped to any
+   * member's clientId. Now fails closed.
    */
   login(dto: LoginDto): AuthTokenResponse {
-    const expectedUser = process.env.API_USERNAME ?? 'admin';
-    const expectedPass = process.env.API_PASSWORD ?? 'changeme';
+    const expectedUser = this.config.get<string>('api.username');
+    const expectedPass = this.config.get<string>('api.password');
+    const adminKey = this.config.get<string>('api.adminKey');
 
-    if (dto.username !== expectedUser || dto.password !== expectedPass) {
+    if (!expectedUser || !expectedPass || !adminKey) {
+      this.logger.error(
+        'Legacy admin login is not configured (needs API_USERNAME, ' +
+          'API_PASSWORD, ADMIN_API_KEY). Refusing to authenticate.',
+      );
+      throw new ServiceUnavailableException('Admin login not configured');
+    }
+
+    // Constant-time on both fields: a plain !== leaks the matching prefix
+    // length through timing, which is enough to recover a password by retry.
+    const userOk = constantTimeEquals(dto.username, expectedUser);
+    const passOk = constantTimeEquals(dto.password, expectedPass);
+    if (!userOk || !passOk) {
       throw new UnauthorizedException('Invalid credentials');
     }
 
-    const secret = process.env.API_KEY ?? 'dev-api-key';
     return {
-      accessToken: secret,
+      accessToken: adminKey,
       tokenType: 'Bearer',
+      // The token IS the static API key, so it does not actually expire.
+      // Reported for client compatibility; rotation is manual. See
+      // director-webapp/RESOLUTION-PLAN.md Phase 2.3.
       expiresIn: 86400,
     };
   }
 
+  /**
+   * Backs GET /auth/validate. Accepts either scope — the endpoint answers
+   * "is this token good for anything", not "what may it do". Authorisation
+   * is enforced by AdminApiKeyGuard / ReportsApiKeyGuard on each route.
+   */
   validateToken(token: string): boolean {
-    const apiKey = process.env.API_KEY ?? 'dev-api-key';
-    return token === apiKey;
+    if (!token) return false;
+    return [
+      this.config.get<string>('api.adminKey'),
+      this.config.get<string>('api.reportsKey'),
+    ]
+      .filter((key): key is string => Boolean(key))
+      .some((key) => constantTimeEquals(token, key));
   }
 
   /**
-   * Admin-only (see auth.controller.ts — guarded by the same ApiKeyGuard as
+   * Admin-only (see auth.controller.ts — guarded by AdminApiKeyGuard, same as
    * /reports/*). Creates one of the fixed set of director/finance-manager
    * logins for the loan-approval workflow. Not public self-registration.
    */

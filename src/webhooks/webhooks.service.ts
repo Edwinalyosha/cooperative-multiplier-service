@@ -326,7 +326,7 @@ export class WebhooksService {
   }
 
   /**
-   * Admin-only (ApiKeyGuard, same convention as POST /auth/users) manual
+   * Admin-only (AdminApiKeyGuard, same as POST /auth/users) manual
    * resolution for entries that never got an auto-match confirm link —
    * zero/multiple Fineract Client email matches, OR a role other than
    * Director (Finance Manager onboarding always goes through here, never

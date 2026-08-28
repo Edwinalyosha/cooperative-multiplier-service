@@ -15,7 +15,7 @@ export const WEBHOOK_SECRET_HEADER = 'x-webhook-secret';
  * Shared-secret guard for the Fineract webhook receivers, which are called
  * by n8n rather than by a logged-in human, so they carry no JWT.
  *
- * Deliberately NOT ApiKeyGuard: that key also unlocks /reports and
+ * Deliberately NOT AdminApiKeyGuard: that key also unlocks
  * POST /auth/users (which mints logins). A webhook receiver should not hold
  * that much authority just to report that someone made a contribution.
  *
