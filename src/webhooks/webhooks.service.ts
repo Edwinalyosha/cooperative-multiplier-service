@@ -8,6 +8,7 @@ import { MultiplierEventType } from '../multiplier/multiplier-event.enum';
 import { FineractWebhookDto } from './dto/fineract-event.dto';
 import { PrismaService } from '../prisma/prisma.service';
 import { FineractService } from '../fineract/fineract.service';
+import { OnboardingEmailService } from './onboarding-email.service';
 
 /** Public base URL this API is actually reachable at — used to build the
  * confirm-link sent in the onboarding email. Not yet in config/env; see
@@ -26,6 +27,7 @@ export class WebhooksService {
     private readonly queue: MultiplierQueueService,
     private readonly prisma: PrismaService,
     private readonly fineract: FineractService,
+    private readonly onboardingEmail: OnboardingEmailService,
   ) {}
 
   private async dispatch(
@@ -279,6 +281,25 @@ export class WebhooksService {
       }
       throw error;
     }
+
+    // Only now is "your portal access is ready" a true statement: the User
+    // row exists and the member can actually log in. This is the moment the
+    // n8n welcome email was firing far too early — it ran at Fineract
+    // user-create time, before any mapping existed (MLTD problem P005).
+    //
+    // Sent AFTER the transaction commits and deliberately never throws: the
+    // mapping is done, and an email problem must not turn a successful
+    // onboarding into an error page, nor tempt anyone to retry and hit
+    // `already_mapped`.
+    const entry = await this.prisma.pendingOnboarding.findUnique({
+      where: { id: entryId },
+      select: { email: true, firstname: true },
+    });
+    await this.onboardingEmail.sendPortalReady({
+      email: entry?.email ?? null,
+      firstname: entry?.firstname ?? null,
+      username,
+    });
 
     return { outcome: 'confirmed', username, clientId };
   }

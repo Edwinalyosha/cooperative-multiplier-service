@@ -126,6 +126,18 @@ export default () => ({
   swagger: {
     enabled: process.env.SWAGGER_ENABLED === 'true',
   },
+  /**
+   * Outbound member email. Separate from the custom Java email plugin inside
+   * the Fineract container (AGENT_HANDOFF.md) — that sends credentials and
+   * password resets; this says where to use them. Unconfigured means the
+   * email is skipped with a warning, never an onboarding failure.
+   */
+  email: {
+    resendApiKey: process.env.RESEND_API_KEY,
+    from: process.env.ONBOARDING_EMAIL_FROM,
+    portalUrl:
+      process.env.PORTAL_LOGIN_URL ?? 'https://director.8teventures.com/login',
+  },
   webhooks: {
     /**
      * Shared secret n8n presents on the Fineract webhook receivers.
