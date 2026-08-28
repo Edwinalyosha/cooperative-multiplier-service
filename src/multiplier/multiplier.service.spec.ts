@@ -3,6 +3,7 @@ import { MultiplierService } from './multiplier.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { FineractService } from '../fineract/fineract.service';
 import { MAX_LOAN_AMOUNT, DEFAULT_MULTIPLIER } from './multiplier.constants';
+import { selectLoanTier } from '../loans/loan-tiers.constants';
 
 /**
  * Covers the pure money-math on MultiplierService: the curve that turns a
@@ -121,11 +122,13 @@ describe('MultiplierService — loan eligibility math', () => {
 
   describe('borrowing-limit ceiling', () => {
     // The highest limit ANY member can ever reach: best possible multiplier
-    // (0.6 -> 5x) against an unbounded balance. This is what makes
-    // `Director Loan Tier3` (minPrincipal 10,000,001) unreachable — see
-    // RESOLUTION-PLAN.md Phase 6. Documents current behaviour; if
-    // MAX_LOAN_AMOUNT is raised to make Tier 3 reachable, this test should
-    // be updated deliberately as part of that change, not quietly deleted.
+    // (0.6 -> 5x) against an unbounded balance.
+    //
+    // MAX_LOAN_AMOUNT is now DERIVED from the loan tiers rather than being an
+    // independent number — see loan-tiers.constants.ts. It is deliberately
+    // not asserted against a literal here: pinning it would just duplicate
+    // the tier table and start the same drift that left Tier 3 unreachable.
+    // loan-tiers.constants.spec.ts owns the structural guarantees.
     it('can never exceed MAX_LOAN_AMOUNT regardless of balance or multiple', () => {
       const bestMultiple = service.calculateLoanMultiple(0.6);
       const { maxLoanAmount } = service.calculateMaxLoanAmount(
@@ -133,7 +136,13 @@ describe('MultiplierService — loan eligibility math', () => {
         bestMultiple,
       );
       expect(maxLoanAmount).toBe(MAX_LOAN_AMOUNT);
-      expect(MAX_LOAN_AMOUNT).toBe(10_000_000);
+    });
+
+    it('the cap is reachable by a real tier, so a capped member can borrow', () => {
+      // If the cap ever exceeded every tier's maximum, a member whose
+      // eligibility was capped would be quoted a limit they could not
+      // actually apply for.
+      expect(selectLoanTier(MAX_LOAN_AMOUNT)).not.toBeNull();
     });
   });
 });

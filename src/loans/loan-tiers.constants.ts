@@ -30,13 +30,28 @@ export const LOAN_TIERS: LoanTier[] = [
     minPrincipal: 1_000_001,
     maxPrincipal: 9_999_999,
   },
-  {
-    name: 'Director Loan Tier3',
-    fineractProductId: 3,
-    minPrincipal: 10_000_001,
-    maxPrincipal: 50_000_000,
-  },
+  // 'Director Loan Tier3' (fineractProductId 3, 10,000,001 - 50,000,000) was
+  // REMOVED 2026-08-28. It had never been reachable: the borrowing cap is the
+  // highest tier maximum, so no request could ever land above Tier 2's
+  // ceiling and reach it. Decision was to drop the tier rather than raise the
+  // cap. The Fineract products (id 3, and its duplicate id 6 'Tier3 Clean')
+  // still exist but are no longer referenced by this service.
 ];
+
+/**
+ * The most any member can be offered, derived from the tiers rather than set
+ * independently.
+ *
+ * This used to be a separate constant in multiplier.constants.ts, with no
+ * link to the table above — which is how Tier 3 came to exist while being
+ * impossible to select: the cap sat at 10,000,000 and Tier 3 began at
+ * 10,000,001. Deriving it means adding or removing a tier can never again
+ * leave a reachable amount with no product behind it, nor an unreachable
+ * product pretending to be available.
+ */
+export const MAX_LOAN_AMOUNT = Math.max(
+  ...LOAN_TIERS.map((tier) => tier.maxPrincipal),
+);
 
 export function selectLoanTier(requestedAmount: number): LoanTier | null {
   return (
