@@ -136,6 +136,7 @@ export class LoansController {
   }
 
   @Post('repayment/record')
+  @Roles(UserRole.FINANCE_MANAGER)
   @ApiOperation({
     summary: 'Record repayment event (on-time, late, or early payoff)',
   })

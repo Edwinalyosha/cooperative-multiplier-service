@@ -7,7 +7,9 @@ import {
   Post,
   Query,
 } from '@nestjs/common';
-import { ApiOperation, ApiQuery, ApiTags } from '@nestjs/swagger';
+import { ApiBearerAuth, ApiOperation, ApiQuery, ApiTags } from '@nestjs/swagger';
+import { UserRole } from '@prisma/client';
+import { Roles } from '../mobile-auth/decorators/roles.decorator';
 import { MultiplierService } from './multiplier.service';
 import { MultiplierQueueService } from '../queue/multiplier-queue.service';
 import { MultiplierEventType } from './multiplier-event.enum';
@@ -23,6 +25,7 @@ export class MultiplierController {
     private readonly queue: MultiplierQueueService,
   ) {}
 
+  @Roles(UserRole.FINANCE_MANAGER)
   @Post('process')
   @ApiOperation({ summary: 'Process any multiplier event (generic)' })
   @ApiQuery({ name: 'async', required: false, type: Boolean })
@@ -41,6 +44,7 @@ export class MultiplierController {
     return this.multiplierService.processFromDto(dto);
   }
 
+  @Roles(UserRole.FINANCE_MANAGER)
   @Post('contribution/on-time')
   @ApiOperation({ summary: 'Reward on-time contribution' })
   @ApiQuery({ name: 'async', required: false, type: Boolean })
@@ -56,6 +60,7 @@ export class MultiplierController {
     );
   }
 
+  @Roles(UserRole.FINANCE_MANAGER)
   @Post('contribution/late')
   @ApiOperation({ summary: 'Penalize late contribution' })
   @ApiQuery({ name: 'async', required: false, type: Boolean })
@@ -71,6 +76,7 @@ export class MultiplierController {
     );
   }
 
+  @Roles(UserRole.FINANCE_MANAGER)
   @Post('repayment/on-time')
   @ApiOperation({ summary: 'Record on-time loan repayment' })
   @ApiQuery({ name: 'async', required: false, type: Boolean })
@@ -86,6 +92,7 @@ export class MultiplierController {
     );
   }
 
+  @Roles(UserRole.FINANCE_MANAGER)
   @Post('repayment/late')
   @ApiOperation({ summary: 'Penalize late loan repayment' })
   @ApiQuery({ name: 'async', required: false, type: Boolean })
@@ -101,6 +108,7 @@ export class MultiplierController {
     );
   }
 
+  @Roles(UserRole.FINANCE_MANAGER)
   @Post('loan/early-payoff')
   @ApiOperation({ summary: 'Strong reward for early full loan payoff' })
   @ApiQuery({ name: 'async', required: false, type: Boolean })
@@ -116,18 +124,21 @@ export class MultiplierController {
     );
   }
 
+  @Roles(UserRole.FINANCE_MANAGER)
   @Get('profile/:clientId')
   @ApiOperation({ summary: 'Current multiplier profile for a client' })
   profile(@Param('clientId', ParseIntPipe) clientId: number) {
     return this.multiplierService.getProfile(clientId);
   }
 
+  @Roles(UserRole.FINANCE_MANAGER)
   @Get('history/:clientId')
   @ApiOperation({ summary: 'Multiplier change history for a client' })
   history(@Param('clientId', ParseIntPipe) clientId: number) {
     return this.multiplierService.getHistory(clientId);
   }
 
+  @Roles(UserRole.FINANCE_MANAGER)
   @Get('eligibility/:clientId')
   @ApiOperation({
     summary:
@@ -144,6 +155,7 @@ export class MultiplierController {
     );
   }
 
+  @Roles(UserRole.FINANCE_MANAGER)
   @Post('eligibility/:clientId/refresh')
   @ApiOperation({ summary: 'Force eligibility refresh from Fineract and cache' })
   @ApiQuery({ name: 'async', required: false, type: Boolean })
@@ -157,6 +169,7 @@ export class MultiplierController {
     return this.multiplierService.refreshEligibility(clientId);
   }
 
+  @Roles(UserRole.FINANCE_MANAGER)
   @Post('eligibility/refresh-all')
   @ApiOperation({ summary: 'Refresh eligibility for all directors (admin/cron)' })
   @ApiQuery({ name: 'async', required: false, type: Boolean })
@@ -165,18 +178,6 @@ export class MultiplierController {
       return this.queue.enqueueBatchRefreshEligibility();
     }
     return this.multiplierService.refreshAllEligibility();
-  }
-
-  /** @deprecated Use POST /multiplier/contribution/on-time instead */
-  @Post('test/:clientId')
-  @ApiOperation({ summary: 'Legacy test endpoint' })
-  test(@Param('clientId') clientId: string) {
-    return this.multiplierService.processEvent(
-      Number(clientId),
-      MultiplierEventType.ON_TIME_CONTRIBUTION,
-      'SYSTEM',
-      'Test event',
-    );
   }
 
   private dispatchEvent(

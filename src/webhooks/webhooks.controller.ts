@@ -16,6 +16,7 @@ import type { Response } from 'express';
 import { WebhooksService } from './webhooks.service';
 import { FineractWebhookDto } from './dto/fineract-event.dto';
 import { ApiKeyGuard } from '../auth/guards/api-key.guard';
+import { Public } from '../auth/decorators/public.decorator';
 import { WebhookSecretGuard } from './guards/webhook-secret.guard';
 
 /** Shared HTML page renderer for both the preview (GET) and result (POST)
@@ -50,6 +51,7 @@ export class WebhooksController {
   // USER/CREATE is registered in Fineract, so nothing legitimate was calling
   // the other five.
   @Post('fineract/contribution/on-time')
+  @Public() // opts out of JWT; WebhookSecretGuard below is its auth
   @UseGuards(WebhookSecretGuard)
   @ApiOperation({ summary: 'Fineract callback: on-time contribution' })
   contributionOnTime(@Body() dto: FineractWebhookDto) {
@@ -57,6 +59,7 @@ export class WebhooksController {
   }
 
   @Post('fineract/contribution/late')
+  @Public() // opts out of JWT; WebhookSecretGuard below is its auth
   @UseGuards(WebhookSecretGuard)
   @ApiOperation({ summary: 'Fineract callback: late contribution' })
   contributionLate(@Body() dto: FineractWebhookDto) {
@@ -64,6 +67,7 @@ export class WebhooksController {
   }
 
   @Post('fineract/repayment/on-time')
+  @Public() // opts out of JWT; WebhookSecretGuard below is its auth
   @UseGuards(WebhookSecretGuard)
   @ApiOperation({ summary: 'Fineract callback: on-time repayment' })
   repaymentOnTime(@Body() dto: FineractWebhookDto) {
@@ -71,6 +75,7 @@ export class WebhooksController {
   }
 
   @Post('fineract/repayment/late')
+  @Public() // opts out of JWT; WebhookSecretGuard below is its auth
   @UseGuards(WebhookSecretGuard)
   @ApiOperation({ summary: 'Fineract callback: late repayment' })
   repaymentLate(@Body() dto: FineractWebhookDto) {
@@ -78,6 +83,7 @@ export class WebhooksController {
   }
 
   @Post('fineract/loan/early-payoff')
+  @Public() // opts out of JWT; WebhookSecretGuard below is its auth
   @UseGuards(WebhookSecretGuard)
   @ApiOperation({ summary: 'Fineract callback: early loan payoff' })
   earlyPayoff(@Body() dto: FineractWebhookDto) {
@@ -99,6 +105,7 @@ export class WebhooksController {
    * has proven it is n8n is fine — n8n is what needs it to send the email.
    */
   @Post('fineract/user/create')
+  @Public() // opts out of JWT; WebhookSecretGuard below is its auth
   @UseGuards(WebhookSecretGuard)
   @ApiOperation({
     summary:
@@ -111,6 +118,7 @@ export class WebhooksController {
   }
 
   @Get('fineract/pending-onboarding')
+  @Public() // opts out of JWT; ApiKeyGuard below is its auth
   @UseGuards(ApiKeyGuard)
   @ApiBearerAuth()
   @ApiOperation({
@@ -122,6 +130,7 @@ export class WebhooksController {
     return this.webhooksService.listPendingOnboarding();
   }
 
+  @Public() // clicked from an email; authorised by the token in the query
   @Get('fineract/onboarding/confirm')
   @ApiOperation({
     summary:
@@ -165,6 +174,7 @@ export class WebhooksController {
     }
   }
 
+  @Public() // submitted from the preview page; token in the query
   @Post('fineract/onboarding/confirm')
   @ApiOperation({
     summary:
@@ -210,6 +220,7 @@ export class WebhooksController {
   }
 
   @Post('fineract/pending-onboarding/:id/resolve')
+  @Public() // opts out of JWT; ApiKeyGuard below is its auth
   @UseGuards(ApiKeyGuard)
   @ApiBearerAuth()
   @ApiOperation({

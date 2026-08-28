@@ -1,4 +1,5 @@
 import { Module } from '@nestjs/common';
+import { APP_GUARD } from '@nestjs/core';
 import { ConfigModule } from '@nestjs/config';
 import { AppController } from './app.controller';
 import { AppService } from './app.service';
@@ -15,6 +16,8 @@ import { QueueModule } from './queue/queue.module';
 import { SchedulerModule } from './scheduler/scheduler.module';
 import { ReportsModule } from './reports/reports.module';
 import { MobileModule } from './mobile/mobile.module';
+import { MobileJwtGuard } from './mobile-auth/guards/mobile-jwt.guard';
+import { RolesGuard } from './mobile-auth/guards/roles.guard';
 
 @Module({
   imports: [
@@ -36,6 +39,20 @@ import { MobileModule } from './mobile/mobile.module';
     MobileModule,
   ],
   controllers: [AppController],
-  providers: [AppService],
+  providers: [
+    AppService,
+    /**
+     * Authentication is opt-OUT, not opt-in. Every route requires a valid
+     * JWT unless it carries @Public(); see MobileJwtGuard for why.
+     *
+     * Order matters: MobileJwtGuard attaches request.user, and RolesGuard
+     * reads it. Nest runs APP_GUARDs in registration order.
+     *
+     * RolesGuard is safe to apply globally — it passes through any route
+     * with no @Roles() metadata.
+     */
+    { provide: APP_GUARD, useClass: MobileJwtGuard },
+    { provide: APP_GUARD, useClass: RolesGuard },
+  ],
 })
 export class AppModule {}

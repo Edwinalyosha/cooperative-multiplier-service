@@ -66,7 +66,9 @@ const PROTECTED: [string, string][] = [
   ['get', '/multiplier/eligibility/1'],
   ['post', '/multiplier/eligibility/1/refresh'],
   ['post', '/multiplier/eligibility/refresh-all'],
-  ['post', '/multiplier/test/1'],
+  // POST /multiplier/test/:clientId was deleted in Phase 2.2 — a deprecated
+  // legacy endpoint that applied a real ON_TIME_CONTRIBUTION event to any
+  // clientId. Nothing called it; it was pure attack surface.
 
   // --- contributions: ENTIRE CONTROLLER UNGUARDED TODAY (P0-3) ---
   ['post', '/contributions/record'],
