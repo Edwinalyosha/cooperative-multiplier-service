@@ -40,7 +40,10 @@ import { ConfigService } from '@nestjs/config';
 import { PrismaService } from '../prisma/prisma.service';
 import { FineractService } from '../fineract/fineract.service';
 import { MultiplierEventType } from './multiplier-event.enum';
-import { MULTIPLIER_STEPS } from './multiplier-steps.constants';
+import {
+  MULTIPLIER_STEPS,
+  isValidStepDirection,
+} from './multiplier-steps.constants';
 import { redactFineractError } from '../fineract/fineract-error.util';
 import {
   DEFAULT_MULTIPLIER,
@@ -123,6 +126,42 @@ export class MultiplierService {
     const minutes =
       this.config.get<number>('eligibility.cacheTtlMinutes') ?? 60;
     return minutes * 60 * 1000;
+  }
+
+  /**
+   * The step for an event, allowing the cooperative to retune magnitudes via
+   * environment variables without a deploy.
+   *
+   * An override whose SIGN is wrong for the event is REJECTED and the default
+   * used instead. Magnitudes are policy and theirs to set; directions are not
+   * — a positive ON_TIME_CONTRIBUTION would silently make punctuality
+   * expensive and lateness profitable, which is precisely the bug this system
+   * shipped with until 2026-08-28.
+   *
+   * Rejection logs and falls back rather than throwing: the service runs under
+   * `restart: unless-stopped`, so refusing to boot over a mistyped decimal
+   * would crash-loop the whole API. Ignoring one bad value is the safer
+   * failure, and it is loud in the log.
+   */
+  private stepFor(eventType: MultiplierEventType): number {
+    const configured = this.config.get<number | undefined>(
+      `multiplier.steps.${eventType}`,
+    );
+
+    if (configured === undefined) {
+      return MULTIPLIER_STEPS[eventType];
+    }
+
+    if (!isValidStepDirection(eventType, configured)) {
+      this.logger.error(
+        `Ignoring configured step ${configured} for ${eventType}: wrong sign ` +
+          'for this event (rewards must be negative, penalties positive). ' +
+          `Using the default ${MULTIPLIER_STEPS[eventType]} instead.`,
+      );
+      return MULTIPLIER_STEPS[eventType];
+    }
+
+    return configured;
   }
 
   /**
@@ -445,7 +484,7 @@ export class MultiplierService {
   ): Promise<ProcessEventResponse> {
     const director = await this.ensureDirector(clientId);
     const oldMultiplier = Number(director.currentMultiplier);
-    const step = MULTIPLIER_STEPS[eventType];
+    const step = this.stepFor(eventType);
     const updatedMultiplier = this.clampMultiplier(oldMultiplier + step);
     const newLoanMultiple = this.calculateLoanMultiple(updatedMultiplier);
     const direction = this.resolveDirection(step);
@@ -510,10 +549,13 @@ export class MultiplierService {
     eventType: MultiplierEventType,
     streak: number,
   ) {
+    const milestone = this.config.get<number>('multiplier.streakMilestone') ?? 3;
+
     if (
       eventType !== MultiplierEventType.ON_TIME_CONTRIBUTION ||
-      streak < 3 ||
-      streak % 3 !== 0
+      milestone < 1 ||
+      streak < milestone ||
+      streak % milestone !== 0
     ) {
       return;
     }

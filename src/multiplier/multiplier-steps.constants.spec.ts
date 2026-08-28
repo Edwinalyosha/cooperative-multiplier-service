@@ -1,5 +1,8 @@
 import { ConfigService } from '@nestjs/config';
-import { MULTIPLIER_STEPS } from './multiplier-steps.constants';
+import {
+  MULTIPLIER_STEPS,
+  isValidStepDirection,
+} from './multiplier-steps.constants';
 import { MultiplierEventType } from './multiplier-event.enum';
 import { MultiplierService } from './multiplier.service';
 import { PrismaService } from '../prisma/prisma.service';
@@ -106,5 +109,72 @@ describe('steps have the right effect on what a member actually pays', () => {
     // The single sentence the old constants violated.
     const after = outcomeAfter(MultiplierEventType.LATE_REPAYMENT);
     expect(after.rateFactor).toBeGreaterThan(before.rateFactor);
+  });
+});
+
+describe('break-even reliability — the number that sets the policy', () => {
+  /**
+   * How often a member must be on time merely to STOP getting worse:
+   *   x = p / (p + e),  e = earning per contribution period
+   * Below x they drift worse forever regardless of how long they stay.
+   *
+   * Chosen with the cooperative 2026-08-28 to sit just under 60%. Asserted as
+   * a band rather than a literal so magnitudes can be retuned freely, while a
+   * change that quietly made the system punitive still fails.
+   */
+  it('sits between 50% and 65%', () => {
+    const streakMilestone = 3;
+    const earningPerPeriod =
+      Math.abs(MULTIPLIER_STEPS[MultiplierEventType.ON_TIME_CONTRIBUTION]) +
+      Math.abs(
+        MULTIPLIER_STEPS[MultiplierEventType.CONSECUTIVE_ON_TIME_CONTRIBUTIONS],
+      ) /
+        streakMilestone;
+    const penalty = MULTIPLIER_STEPS[MultiplierEventType.LATE_CONTRIBUTION];
+
+    const breakEven = penalty / (penalty + earningPerPeriod);
+
+    expect(breakEven).toBeGreaterThan(0.5);
+    expect(breakEven).toBeLessThan(0.65);
+  });
+
+  it('lets a member reach the best rate within about a year of consistency', () => {
+    // 1.000 -> 0.600 is 0.4. Too slow and the multiplier is decorative;
+    // too fast and it stops meaning anything.
+    const streakMilestone = 3;
+    const earningPerPeriod =
+      Math.abs(MULTIPLIER_STEPS[MultiplierEventType.ON_TIME_CONTRIBUTION]) +
+      Math.abs(
+        MULTIPLIER_STEPS[MultiplierEventType.CONSECUTIVE_ON_TIME_CONTRIBUTIONS],
+      ) /
+        streakMilestone;
+
+    const periodsToBest = 0.4 / earningPerPeriod;
+    expect(periodsToBest).toBeGreaterThan(20);
+    expect(periodsToBest).toBeLessThan(60);
+  });
+});
+
+describe('configured overrides cannot invert the incentives', () => {
+  it.each(REWARDS)('rejects a positive override for reward %s', (event) => {
+    expect(isValidStepDirection(event, 0.02)).toBe(false);
+    expect(isValidStepDirection(event, -0.02)).toBe(true);
+  });
+
+  it.each(PENALTIES)('rejects a negative override for penalty %s', (event) => {
+    expect(isValidStepDirection(event, -0.02)).toBe(false);
+    expect(isValidStepDirection(event, 0.02)).toBe(true);
+  });
+
+  it('rejects zero — an event that moves nothing is almost certainly a typo', () => {
+    expect(isValidStepDirection(MultiplierEventType.LATE_CONTRIBUTION, 0)).toBe(
+      false,
+    );
+  });
+
+  it('rejects NaN from an unparseable env value', () => {
+    expect(
+      isValidStepDirection(MultiplierEventType.LATE_CONTRIBUTION, NaN),
+    ).toBe(false);
   });
 });

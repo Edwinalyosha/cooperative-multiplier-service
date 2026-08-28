@@ -4,8 +4,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { MultiplierQueueService } from '../queue/multiplier-queue.service';
 import { MultiplierService } from '../multiplier/multiplier.service';
 import { MultiplierEventType } from '../multiplier/multiplier-event.enum';
-
-const STREAK_MILESTONE = 3;
+import { ConfigService } from '@nestjs/config';
 
 @Injectable()
 export class StreakScheduler {
@@ -15,7 +14,13 @@ export class StreakScheduler {
     private readonly prisma: PrismaService,
     private readonly multiplierService: MultiplierService,
     private readonly queue: MultiplierQueueService,
+    private readonly config: ConfigService,
   ) {}
+
+  /** Shared with MultiplierService — see configuration.ts. */
+  private get milestone(): number {
+    return this.config.get<number>('multiplier.streakMilestone') ?? 3;
+  }
 
   @Cron(process.env.CRON_STREAK_CHECK ?? '0 6 * * *')
   async handleStreakMilestones() {
@@ -23,14 +28,14 @@ export class StreakScheduler {
 
     const directors = await this.prisma.directorMultiplier.findMany({
       where: {
-        consecutiveOnTimeContributions: { gte: STREAK_MILESTONE },
+        consecutiveOnTimeContributions: { gte: this.milestone },
       },
     });
 
     let processed = 0;
     for (const director of directors) {
       const streak = director.consecutiveOnTimeContributions ?? 0;
-      if (streak % STREAK_MILESTONE !== 0) continue;
+      if (this.milestone < 1 || streak % this.milestone !== 0) continue;
 
       const recentStreakEvent = await this.prisma.multiplierHistory.findFirst({
         where: {

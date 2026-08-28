@@ -1,3 +1,10 @@
+/** Parses an optional float env var; undefined when unset or unparseable. */
+function optionalFloat(value: string | undefined): number | undefined {
+  if (value === undefined || value.trim() === '') return undefined;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : undefined;
+}
+
 export default () => ({
   port: parseInt(process.env.PORT ?? '3000', 10),
   fineract: {
@@ -13,6 +20,43 @@ export default () => ({
   queue: {
     /** When true, webhooks and optional API calls enqueue BullMQ jobs */
     asyncEnabled: process.env.QUEUE_ASYNC_ENABLED !== 'false',
+  },
+  /**
+   * Multiplier policy — the cooperative's dials, changeable without a deploy.
+   *
+   * `contributionPeriodDays` is how often a contribution is expected. It is
+   * COUPLED to the step values below: those are per contribution, not per unit
+   * of time, so moving from weekly (7) to monthly (30) without retuning turns
+   * "best rate in ~27 weeks" into "best rate in ~27 months". Change one,
+   * revisit the other. See multiplier-steps.constants.ts for the arithmetic.
+   *
+   * Step overrides set magnitude only. A value whose SIGN would invert the
+   * incentive (rewarding lateness, punishing early payoff) is rejected at
+   * runtime and the built-in default used instead — magnitudes are policy,
+   * directions are not.
+   */
+  multiplier: {
+    contributionPeriodDays: parseInt(
+      process.env.CONTRIBUTION_PERIOD_DAYS ?? '7',
+      10,
+    ),
+    /**
+     * Award the streak bonus every Nth consecutive on-time contribution.
+     * Single source of truth: previously hardcoded as 3 in BOTH
+     * multiplier.service.ts and streak.scheduler.ts, which could drift apart
+     * and award bonuses on different cadences depending on which path fired.
+     */
+    streakMilestone: parseInt(process.env.STREAK_MILESTONE ?? '3', 10),
+    steps: {
+      ON_TIME_CONTRIBUTION: optionalFloat(process.env.STEP_ON_TIME_CONTRIBUTION),
+      CONSECUTIVE_ON_TIME_CONTRIBUTIONS: optionalFloat(
+        process.env.STEP_CONSECUTIVE_ON_TIME_CONTRIBUTIONS,
+      ),
+      LATE_CONTRIBUTION: optionalFloat(process.env.STEP_LATE_CONTRIBUTION),
+      ON_TIME_REPAYMENT: optionalFloat(process.env.STEP_ON_TIME_REPAYMENT),
+      LATE_REPAYMENT: optionalFloat(process.env.STEP_LATE_REPAYMENT),
+      EARLY_FULL_PAYOFF: optionalFloat(process.env.STEP_EARLY_FULL_PAYOFF),
+    },
   },
   eligibility: {
     /** Cache TTL in minutes before auto-refresh from Fineract */
