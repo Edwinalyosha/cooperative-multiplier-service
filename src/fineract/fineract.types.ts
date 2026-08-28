@@ -129,3 +129,15 @@ export interface WithdrawFineractLoanParams {
   loanId: number;
   withdrawnOnDate: string;
 }
+
+/** Savings account fetched with `?associations=transactions`. */
+export interface FineractSavingsWithTransactions {
+  id?: number;
+  transactions?: {
+    id?: number;
+    /** `[year, month, day]`, month 1-based — see parseFineractDate. */
+    date?: unknown;
+    amount?: number;
+    transactionType?: { deposit?: boolean; withdrawal?: boolean };
+  }[];
+}

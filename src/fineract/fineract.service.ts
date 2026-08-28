@@ -1,5 +1,6 @@
 import { HttpService } from '@nestjs/axios';
 import { redactFineractError } from './fineract-error.util';
+import { FineractSavingsWithTransactions } from './fineract.types';
 import {
   Injectable,
   Logger,
@@ -234,6 +235,71 @@ export class FineractService {
       detail.accountBalance ??
       0
     );
+  }
+
+  /**
+   * Deposits into a client's savings accounts on the given calendar dates,
+   * inclusive. Used by the weekly contribution sweep.
+   *
+   * Fineract records transaction dates as CALENDAR dates with no time
+   * component (`[2026, 8, 24]`), so the comparison is date-based rather than
+   * timestamp-based. That sidesteps the timezone problem entirely for
+   * matching — the caller decides which dates constitute the week in
+   * Africa/Kampala terms, and those dates are what Fineract stored.
+   *
+   * Only genuine deposits count. Interest postings, fees, and withdrawals are
+   * excluded: a member should not earn a contribution credit because the
+   * cooperative posted interest to their account.
+   */
+  async getDepositsBetween(
+    clientId: number,
+    startDate: string,
+    endDate: string,
+  ): Promise<{ date: string; amount: number }[]> {
+    if (!this.isConfigured()) return [];
+
+    const accounts = await this.getClientAccounts(clientId);
+    if (!accounts?.savingsAccounts?.length) return [];
+
+    const deposits: { date: string; amount: number }[] = [];
+
+    for (const account of accounts.savingsAccounts) {
+      if (!account.id) continue;
+      try {
+        const detail = await this.get<FineractSavingsWithTransactions>(
+          `/savingsaccounts/${account.id}?associations=transactions`,
+        );
+        for (const tx of detail.transactions ?? []) {
+          if (!tx.transactionType?.deposit) continue;
+          const date = FineractService.parseFineractDate(tx.date);
+          if (!date || date < startDate || date > endDate) continue;
+          deposits.push({ date, amount: Number(tx.amount) || 0 });
+        }
+      } catch (error) {
+        this.logger.error(
+          `Failed to fetch transactions for savings account ${account.id}: ` +
+            redactFineractError(error),
+        );
+        // Deliberately rethrown: the caller must not mistake "we could not
+        // read the account" for "no deposits were made" and mark a member
+        // late for a contribution they actually paid.
+        throw error;
+      }
+    }
+
+    return deposits;
+  }
+
+  /**
+   * Fineract returns dates as `[year, month, day]` with a 1-based month.
+   * Normalised to `YYYY-MM-DD` for string comparison.
+   */
+  static parseFineractDate(value: unknown): string | null {
+    if (typeof value === 'string') return value.slice(0, 10);
+    if (!Array.isArray(value) || value.length < 3) return null;
+    const [y, m, d] = value as number[];
+    if (![y, m, d].every((n) => Number.isFinite(n))) return null;
+    return `${y}-${String(m).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
   }
 
   /**

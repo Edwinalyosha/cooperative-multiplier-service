@@ -47,6 +47,16 @@ export default () => ({
      * and award bonuses on different cadences depending on which path fired.
      */
     streakMilestone: parseInt(process.env.STREAK_MILESTONE ?? '3', 10),
+    /**
+     * Minimum deposit, per contribution period, for the week to count as
+     * ON TIME. Below it the week is LATE — a partial payment is not a met
+     * obligation. Cooperative-wide; if members ever get individual amounts
+     * this needs to become per-member data rather than config.
+     */
+    weeklyContributionMinimum: parseInt(
+      process.env.WEEKLY_CONTRIBUTION_MINIMUM ?? '20000',
+      10,
+    ),
     steps: {
       ON_TIME_CONTRIBUTION: optionalFloat(process.env.STEP_ON_TIME_CONTRIBUTION),
       CONSECUTIVE_ON_TIME_CONTRIBUTIONS: optionalFloat(
@@ -74,6 +84,14 @@ export default () => ({
      * application expiry deadline reasonably tight rather than the daily
      * cadence used by the other two schedulers. */
     loanExpiryCheck: process.env.CRON_LOAN_EXPIRY_CHECK ?? '0 * * * *',
+    /**
+     * Weekly contribution sweep. Default is Sunday 22:00 UTC = Monday 01:00
+     * in Kampala (UTC+3) — an hour after the week closes, so the period is
+     * definitively over. The container runs TZ=UTC, so this expression is in
+     * UTC while the PERIOD is anchored to Kampala; see
+     * contribution-period.util.ts.
+     */
+    contributionSweep: process.env.CRON_CONTRIBUTION_SWEEP ?? '0 22 * * 0',
   },
   mobile: {
     corsOrigins: (process.env.MOBILE_CORS_ORIGINS ?? '*')
