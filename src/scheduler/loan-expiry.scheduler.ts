@@ -18,9 +18,11 @@ export class LoanExpiryScheduler {
   async handleLoanExpirySweep() {
     this.logger.log('Starting loan application expiry sweep');
     const result = await this.loansService.expireStaleApplications();
-    if (result.expired > 0 || result.failed > 0) {
+    if (result.expired > 0 || result.failed > 0 || result.skipped > 0) {
       this.logger.log(
-        `Loan expiry sweep complete: ${result.expired} expired, ${result.failed} failed`,
+        `Loan expiry sweep complete: ${result.expired} expired, ` +
+          `${result.failed} failed, ${result.skipped} skipped ` +
+          '(decided after selection)',
       );
     }
   }

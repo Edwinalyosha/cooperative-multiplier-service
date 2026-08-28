@@ -96,12 +96,27 @@ model LoanApplication {
   /// not at final approval. See spec doc for why the sequencing matters.
   fineractLoanId             Int?
 
+  /// Set once Fineract has ACCEPTED the approve transition, before disburse
+  /// is attempted. Finance approval is two separate Fineract calls, and the
+  /// gap between them was unrecoverable: if approve succeeded and disburse
+  /// failed, Fineract held the loan APPROVED while this row still said
+  /// PENDING_FINANCE_APPROVAL, and every retry then failed because Fineract
+  /// will not approve an already-approved loan. This makes the retry
+  /// resumable — see LoansService.financeDecision.
+  fineractApprovedAt         DateTime?
+
   approvals                  LoanApproval[]
 }
 
 enum LoanApplicationStatus {
   PENDING_DIRECTOR_APPROVAL
   PENDING_FINANCE_APPROVAL
+  /// Fineract accepted the approval but disbursement did not complete. A
+  /// real, recoverable state rather than an error: the money has not moved,
+  /// the finance manager can retry, and the application is visible as stuck
+  /// instead of silently sitting in PENDING_FINANCE_APPROVAL while Fineract
+  /// disagrees.
+  APPROVED_PENDING_DISBURSEMENT
   APPROVED
   REJECTED
   WITHDRAWN

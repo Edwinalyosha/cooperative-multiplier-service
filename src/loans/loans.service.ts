@@ -18,6 +18,28 @@ import { DirectorDecisionDto } from './dto/director-decision.dto';
 import { FinanceDecisionDto } from './dto/finance-decision.dto';
 import { selectLoanTier } from './loan-tiers.constants';
 
+/**
+ * Distinct director APPROVE votes needed to advance an application to finance.
+ * "First 2 approvals win" — rejections are logged but never block or count.
+ * See context/loan-approval-workflow-spec.md.
+ */
+const DIRECTOR_QUORUM = 2;
+
+/**
+ * Pulls Fineract's own error text out of an axios failure so the caller sees
+ * why a transition was refused ("loan is already approved", "insufficient
+ * funds") rather than a bare "request failed". Returns a leading-space
+ * fragment, or a full stop when Fineract said nothing useful.
+ */
+function describeFineractError(error: unknown): string {
+  const message = (
+    error as {
+      response?: { data?: { errors?: { defaultUserMessage?: string }[] } };
+    }
+  )?.response?.data?.errors?.[0]?.defaultUserMessage;
+  return message ? `: ${message}` : '.';
+}
+
 @Injectable()
 export class LoansService {
   private readonly logger = new Logger(LoansService.name);
@@ -226,10 +248,44 @@ export class LoansService {
       return this.getLoanApplication(applicationId);
     }
 
-    const priorApprovals = application.approvals.filter(
-      (a) => a.decision === ApprovalDecision.APPROVE,
+    // P2-3: claim this director's vote row FIRST, inside a transaction that
+    // locks the application, and decide from the state observed under that
+    // lock. The previous read-decide-write was racy: two different directors
+    // voting at the same moment could both read zero prior approvals, both
+    // call addGuarantor, and leave the loan with two guarantors in Fineract
+    // and two rows flagged isGuarantor. Since the guarantor is the person
+    // "responsible for ensuring the borrower repays", an ambiguous record
+    // there is a governance problem, not just a data smell.
+    //
+    // The @@unique([loanApplicationId, directorClientId]) constraint already
+    // stopped the SAME director double-voting (including a double-tap on a
+    // slow connection); this closes the different-directors interleave.
+    const { approvalRow, isFirstApproval } = await this.prisma.$transaction(
+      async (tx) => {
+        // SELECT ... FOR UPDATE: serialises concurrent voters on this row.
+        await tx.$queryRaw`SELECT id FROM "LoanApplication" WHERE id = ${applicationId} FOR UPDATE`;
+
+        const priorApprovals = await tx.loanApproval.count({
+          where: {
+            loanApplicationId: applicationId,
+            decision: ApprovalDecision.APPROVE,
+          },
+        });
+
+        const row = await tx.loanApproval.create({
+          data: {
+            loanApplicationId: applicationId,
+            directorClientId,
+            decision: ApprovalDecision.APPROVE,
+            isGuarantor: priorApprovals === 0,
+            notes: dto.notes,
+          },
+        });
+
+        return { approvalRow: row, isFirstApproval: priorApprovals === 0 };
+      },
     );
-    const isFirstApproval = priorApprovals.length === 0;
+
     let guarantorMessage: string | null = null;
 
     if (isFirstApproval && application.fineractLoanId) {
@@ -239,32 +295,40 @@ export class LoansService {
           guarantorClientId: directorClientId,
         });
       } catch (error) {
-        const fineractMessage =
-          (error as { response?: { data?: { errors?: { defaultUserMessage?: string }[] } } })
-            ?.response?.data?.errors?.[0]?.defaultUserMessage;
+        // The vote row exists already (it had to, to win the guarantor race
+        // safely). Roll it back so the director can retry: leaving it would
+        // record them as having voted while Fineract holds no guarantor, and
+        // the unique constraint would then reject their retry as a duplicate.
+        await this.prisma.loanApproval.delete({ where: { id: approvalRow.id } });
         throw new BadRequestException(
           `Could not register director ${directorClientId} as guarantor in Fineract` +
-            (fineractMessage ? `: ${fineractMessage}` : '.'),
+            describeFineractError(error),
         );
       }
       guarantorMessage =
         'You are now the guarantor for this loan — you are responsible for ensuring the borrower repays it.';
     }
 
-    await this.prisma.loanApproval.create({
-      data: {
+    // Count under the same rule the transaction used: this director's row is
+    // already committed, so the quorum is complete when two APPROVE rows now
+    // exist. Reading the count back (rather than reusing a pre-transaction
+    // snapshot) keeps this correct when votes land concurrently.
+    const approvalCount = await this.prisma.loanApproval.count({
+      where: {
         loanApplicationId: applicationId,
-        directorClientId,
         decision: ApprovalDecision.APPROVE,
-        isGuarantor: isFirstApproval,
-        notes: dto.notes,
       },
     });
 
-    const willCompleteQuorum = priorApprovals.length === 1;
-    if (willCompleteQuorum) {
-      await this.prisma.loanApplication.update({
-        where: { id: applicationId },
+    if (approvalCount >= DIRECTOR_QUORUM) {
+      // updateMany with a status precondition, so two directors completing
+      // the quorum at the same instant cannot both advance it — the second
+      // update matches zero rows instead of overwriting a later state.
+      await this.prisma.loanApplication.updateMany({
+        where: {
+          id: applicationId,
+          status: LoanApplicationStatus.PENDING_DIRECTOR_APPROVAL,
+        },
         data: { status: LoanApplicationStatus.PENDING_FINANCE_APPROVAL },
       });
     }
@@ -289,7 +353,16 @@ export class LoansService {
   ) {
     const application = await this.getLoanApplication(applicationId);
 
-    if (application.status !== LoanApplicationStatus.PENDING_FINANCE_APPROVAL) {
+    // APPROVED_PENDING_DISBURSEMENT is admitted so a half-completed approval
+    // can be retried. Only the disbursement step will actually re-run — the
+    // approve step is skipped via fineractApprovedAt below.
+    const retryable =
+      application.status === LoanApplicationStatus.PENDING_FINANCE_APPROVAL ||
+      (application.status ===
+        LoanApplicationStatus.APPROVED_PENDING_DISBURSEMENT &&
+        dto.decision === ApprovalDecision.APPROVE);
+
+    if (!retryable) {
       throw new BadRequestException(
         `Application ${applicationId} is not awaiting finance approval (status: ${application.status}).`,
       );
@@ -303,31 +376,87 @@ export class LoansService {
 
     const today = FineractService.formatFineractDate(new Date());
 
-    try {
-      if (dto.decision === ApprovalDecision.APPROVE) {
-        await this.fineract.approveLoan({
-          loanId: application.fineractLoanId,
-          approvedOnDate: today,
-          expectedDisbursementDate: today,
+    if (dto.decision === ApprovalDecision.APPROVE) {
+      // Two separate Fineract calls, and the gap between them used to be
+      // unrecoverable. If approve succeeded and disburse failed (network
+      // blip, Fineract restart, date validation, insufficient funds in the
+      // disbursement account), the catch below threw and the status update
+      // never ran — leaving Fineract holding the loan APPROVED while this
+      // row still said PENDING_FINANCE_APPROVAL. The finance manager would
+      // retry, approve would fail because Fineract will not approve an
+      // already-approved loan, and the application was stuck forever,
+      // needing manual mifos-web surgery while a member waited for money.
+      //
+      // Each step is now recorded as it succeeds, so a retry resumes from
+      // where it stopped rather than starting over.
+
+      if (!application.fineractApprovedAt) {
+        try {
+          await this.fineract.approveLoan({
+            loanId: application.fineractLoanId,
+            approvedOnDate: today,
+            expectedDisbursementDate: today,
+          });
+        } catch (error) {
+          // Nothing moved: approve is the first call, so there is nothing to
+          // unwind and the application stays where it was.
+          throw new BadRequestException(
+            `Fineract approve failed${describeFineractError(error)}`,
+          );
+        }
+
+        // Persist BEFORE attempting disburse. If the process dies between
+        // these two calls, the retry must still know approve is done.
+        await this.prisma.loanApplication.update({
+          where: { id: applicationId },
+          data: { fineractApprovedAt: new Date() },
         });
+      } else {
+        this.logger.warn(
+          `Application ${applicationId} was already approved in Fineract at ` +
+            `${application.fineractApprovedAt.toISOString()} — resuming at disbursement.`,
+        );
+      }
+
+      try {
         await this.fineract.disburseLoan({
           loanId: application.fineractLoanId,
           actualDisbursementDate: today,
         });
-      } else {
+      } catch (error) {
+        // Approve landed, disburse did not. Record that plainly instead of
+        // leaving the row claiming the application is still awaiting finance:
+        // the money has not moved, and a retry can safely resume.
+        await this.prisma.loanApplication.update({
+          where: { id: applicationId },
+          data: {
+            status: LoanApplicationStatus.APPROVED_PENDING_DISBURSEMENT,
+            financeDecidedBy: financeUserId,
+            financeDecidedAt: new Date(),
+            financeNotes: dto.notes,
+          },
+        });
+        this.logger.error(
+          `Application ${applicationId}: Fineract approved but disbursement ` +
+            'failed. Marked APPROVED_PENDING_DISBURSEMENT; retrying the ' +
+            'finance decision will resume at disbursement. No money moved.',
+        );
+        throw new BadRequestException(
+          `Fineract disbursement failed${describeFineractError(error)} ` +
+            'The approval is recorded; retry to complete disbursement.',
+        );
+      }
+    } else {
+      try {
         await this.fineract.rejectLoan({
           loanId: application.fineractLoanId,
           rejectedOnDate: today,
         });
+      } catch (error) {
+        throw new BadRequestException(
+          `Fineract reject failed${describeFineractError(error)}`,
+        );
       }
-    } catch (error) {
-      const fineractMessage =
-        (error as { response?: { data?: { errors?: { defaultUserMessage?: string }[] } } })
-          ?.response?.data?.errors?.[0]?.defaultUserMessage;
-      throw new BadRequestException(
-        `Fineract ${dto.decision === ApprovalDecision.APPROVE ? 'approve/disburse' : 'reject'} failed` +
-          (fineractMessage ? `: ${fineractMessage}` : '.'),
-      );
     }
 
     await this.prisma.loanApplication.update({
@@ -402,7 +531,11 @@ export class LoansService {
    * decided in time. One continuous 48h window from requestedAt covering
    * both pending stages combined (not reset on advancing stages).
    */
-  async expireStaleApplications(): Promise<{ expired: number; failed: number }> {
+  async expireStaleApplications(): Promise<{
+    expired: number;
+    failed: number;
+    skipped: number;
+  }> {
     const cutoff = new Date(Date.now() - 48 * 60 * 60 * 1000);
     const stale = await this.prisma.loanApplication.findMany({
       where: {
@@ -419,20 +552,65 @@ export class LoansService {
     let expired = 0;
     let failed = 0;
 
+    let skipped = 0;
+
     for (const application of stale) {
       try {
+        // P2-4: the list above was read before this loop began, and rejecting
+        // in Fineract takes a network round trip each. An application selected
+        // at 48h00m can be approved by finance at 48h01m — and rejecting a
+        // loan Fineract has already disbursed is not a state anyone wants to
+        // untangle. Re-read immediately before acting, and claim the row with
+        // a status precondition so the two paths cannot interleave.
+        const claimed = await this.prisma.loanApplication.updateMany({
+          where: {
+            id: application.id,
+            status: {
+              in: [
+                LoanApplicationStatus.PENDING_DIRECTOR_APPROVAL,
+                LoanApplicationStatus.PENDING_FINANCE_APPROVAL,
+              ],
+            },
+          },
+          data: { status: LoanApplicationStatus.EXPIRED },
+        });
+
+        if (claimed.count === 0) {
+          // Somebody decided it between the query and now. Leave it alone.
+          this.logger.log(
+            `Skipping expiry of application ${application.id}: it was ` +
+              'decided after the sweep selected it.',
+          );
+          skipped++;
+          continue;
+        }
+
         if (application.fineractLoanId) {
           await this.fineract.rejectLoan({
             loanId: application.fineractLoanId,
             rejectedOnDate: FineractService.formatFineractDate(new Date()),
           });
         }
-        await this.prisma.loanApplication.update({
-          where: { id: application.id },
-          data: { status: LoanApplicationStatus.EXPIRED },
-        });
         expired++;
       } catch (error) {
+        // The row was already claimed as EXPIRED above, but Fineract refused
+        // its side. Put the status back so the next hourly sweep retries,
+        // rather than leaving this row EXPIRED here and still pending in
+        // Fineract with nothing ever selecting it again.
+        await this.prisma.loanApplication
+          .updateMany({
+            where: { id: application.id, status: LoanApplicationStatus.EXPIRED },
+            data: { status: application.status },
+          })
+          .catch((revertError) =>
+            this.logger.error(
+              `Could not revert application ${application.id} after a failed ` +
+                'expiry — it is EXPIRED locally but may still be pending in ' +
+                'Fineract. Needs manual reconciliation.',
+              revertError,
+            ),
+          );
+
         this.logger.warn(
           `Failed to expire loan application ${application.id}`,
           error,
@@ -441,7 +619,7 @@ export class LoansService {
       }
     }
 
-    return { expired, failed };
+    return { expired, failed, skipped };
   }
 
   /**
