@@ -11,6 +11,7 @@ import { randomUUID } from 'crypto';
 import type { Redis } from 'ioredis';
 import { UserRole } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
+import { redactFineractError } from '../fineract/fineract-error.util';
 import { FineractService } from '../fineract/fineract.service';
 import { MobileLoginDto } from './dto/mobile-login.dto';
 import { TokenResponseDto, AppUserDto } from './dto/token-response.dto';
@@ -103,7 +104,9 @@ export class MobileAuthService {
     try {
       fineractAuth = await this.fineract.authenticateUser(username, password);
     } catch (error) {
-      this.logger.error('Fineract unreachable during login', error);
+      this.logger.error(
+        `Fineract unreachable during login: ${redactFineractError(error)}`,
+      );
       throw new ServiceUnavailableException('FINERACT_UNREACHABLE');
     }
     if (!fineractAuth) {

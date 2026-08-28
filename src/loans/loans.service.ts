@@ -17,6 +17,10 @@ import { ApplyLoanDto } from './dto/apply-loan.dto';
 import { DirectorDecisionDto } from './dto/director-decision.dto';
 import { FinanceDecisionDto } from './dto/finance-decision.dto';
 import { selectLoanTier } from './loan-tiers.constants';
+import {
+  describeFineractError,
+  redactFineractError,
+} from '../fineract/fineract-error.util';
 
 /**
  * Distinct director APPROVE votes needed to advance an application to finance.
@@ -24,21 +28,6 @@ import { selectLoanTier } from './loan-tiers.constants';
  * See context/loan-approval-workflow-spec.md.
  */
 const DIRECTOR_QUORUM = 2;
-
-/**
- * Pulls Fineract's own error text out of an axios failure so the caller sees
- * why a transition was refused ("loan is already approved", "insufficient
- * funds") rather than a bare "request failed". Returns a leading-space
- * fragment, or a full stop when Fineract said nothing useful.
- */
-function describeFineractError(error: unknown): string {
-  const message = (
-    error as {
-      response?: { data?: { errors?: { defaultUserMessage?: string }[] } };
-    }
-  )?.response?.data?.errors?.[0]?.defaultUserMessage;
-  return message ? `: ${message}` : '.';
-}
 
 @Injectable()
 export class LoansService {
@@ -612,8 +601,8 @@ export class LoansService {
           );
 
         this.logger.warn(
-          `Failed to expire loan application ${application.id}`,
-          error,
+          `Failed to expire loan application ${application.id}: ` +
+            redactFineractError(error),
         );
         failed++;
       }

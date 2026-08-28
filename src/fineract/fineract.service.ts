@@ -1,4 +1,5 @@
 import { HttpService } from '@nestjs/axios';
+import { redactFineractError } from './fineract-error.util';
 import {
   Injectable,
   Logger,
@@ -146,7 +147,9 @@ export class FineractService {
       if (status === 401 || status === 400) {
         return null;
       }
-      this.logger.error('Fineract authentication call failed (non-401)', error);
+      this.logger.error(
+        `Fineract authentication call failed (non-401): ${redactFineractError(error)}`,
+      );
       throw error;
     }
   }
@@ -156,7 +159,9 @@ export class FineractService {
     try {
       return await this.get<FineractClient>(`/clients/${clientId}`);
     } catch (error) {
-      this.logger.error(`Failed to fetch client ${clientId}`, error);
+      this.logger.error(
+        `Failed to fetch client ${clientId}: ${redactFineractError(error)}`,
+      );
       return null;
     }
   }
@@ -196,7 +201,9 @@ export class FineractService {
         (c) => c.emailAddress?.trim().toLowerCase() === normalizedEmail,
       );
     } catch (error) {
-      this.logger.error(`Failed to search clients by email`, error);
+      this.logger.error(
+        `Failed to search clients by email: ${redactFineractError(error)}`,
+      );
       return [];
     }
   }
@@ -210,7 +217,9 @@ export class FineractService {
         `/clients/${clientId}/accounts`,
       );
     } catch (error) {
-      this.logger.error(`Failed to fetch accounts for client ${clientId}`, error);
+      this.logger.error(
+        `Failed to fetch accounts for client ${clientId}: ${redactFineractError(error)}`,
+      );
       return null;
     }
   }

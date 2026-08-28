@@ -41,6 +41,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { FineractService } from '../fineract/fineract.service';
 import { MultiplierEventType } from './multiplier-event.enum';
 import { MULTIPLIER_STEPS } from './multiplier-steps.constants';
+import { redactFineractError } from '../fineract/fineract-error.util';
 import {
   DEFAULT_MULTIPLIER,
   MAX_LOAN_AMOUNT,
@@ -124,11 +125,20 @@ export class MultiplierService {
     return minutes * 60 * 1000;
   }
 
+  /**
+   * A NEGATIVE step lowers the multiplier, which is the member's BETTER
+   * state — cheaper loan, higher limit. So negative is an UPGRADE.
+   *
+   * This was inverted until 2026-08-28, alongside the step signs themselves
+   * (see multiplier-steps.constants.ts). The label is what a member reads in
+   * their history feed, so getting it backwards would have shown every
+   * penalty as good news.
+   */
   private resolveDirection(
     step: number,
   ): 'UPGRADE' | 'DOWNGRADE' | 'NEUTRAL' {
-    if (step > 0) return 'UPGRADE';
-    if (step < 0) return 'DOWNGRADE';
+    if (step < 0) return 'UPGRADE';
+    if (step > 0) return 'DOWNGRADE';
     return 'NEUTRAL';
   }
 
@@ -311,7 +321,9 @@ export class MultiplierService {
         await this.refreshEligibility(clientId);
         refreshed++;
       } catch (error) {
-        this.logger.warn(`Eligibility refresh failed for ${clientId}`, error);
+        this.logger.warn(
+          `Eligibility refresh failed for ${clientId}: ${redactFineractError(error)}`,
+        );
         failed++;
       }
     }
