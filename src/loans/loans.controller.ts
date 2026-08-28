@@ -18,6 +18,7 @@ import { ApplyLoanDto } from './dto/apply-loan.dto';
 import { DirectorDecisionDto } from './dto/director-decision.dto';
 import { FinanceDecisionDto } from './dto/finance-decision.dto';
 import { MobileJwtGuard } from '../mobile-auth/guards/mobile-jwt.guard';
+import { ClientOwnershipGuard } from '../mobile-auth/guards/client-ownership.guard';
 import { RolesGuard } from '../mobile-auth/guards/roles.guard';
 import { Roles } from '../mobile-auth/decorators/roles.decorator';
 import { MobileJwtPayload } from '../mobile-auth/strategies/mobile-jwt.strategy';
@@ -75,11 +76,20 @@ export class LoansController {
   }
 
   @Get('applications/:id')
-  @UseGuards(MobileJwtGuard)
+  @UseGuards(MobileJwtGuard, RolesGuard)
+  @Roles(UserRole.DIRECTOR, UserRole.FINANCE_MANAGER)
   @ApiBearerAuth()
-  @ApiOperation({ summary: 'Get a loan application by id' })
-  getLoanApplication(@Param('id', ParseIntPipe) id: number) {
-    return this.loansService.getLoanApplication(id);
+  @ApiOperation({
+    summary:
+      'Get a loan application by id. Readable by the applicant, by the ' +
+      'finance manager, and by a director while it awaits director approval ' +
+      'or afterwards if they voted on it — see getLoanApplicationFor.',
+  })
+  getLoanApplication(
+    @Param('id', ParseIntPipe) id: number,
+    @Req() req: { user: MobileJwtPayload },
+  ) {
+    return this.loansService.getLoanApplicationFor(id, req.user);
   }
 
   @Post('applications/:id/director-decision')
@@ -148,7 +158,15 @@ export class LoansController {
     return this.loansService.recordRepayment(dto, async);
   }
 
+  /**
+   * Called by director-webapp's Multiplier page (src/lib/multiplier.ts) for
+   * the logged-in member. Unauthenticated until 2026-08-24 (P0-4), then
+   * merely authenticated; ClientOwnershipGuard now also stops one member
+   * reading another's repayment streak and active Fineract loans.
+   */
   @Get('repayment-summary/:clientId')
+  @UseGuards(MobileJwtGuard, ClientOwnershipGuard)
+  @ApiBearerAuth()
   @ApiOperation({ summary: 'Repayment streak + active Fineract loans' })
   repaymentSummary(@Param('clientId', ParseIntPipe) clientId: number) {
     return this.loansService.getRepaymentSummary(clientId);

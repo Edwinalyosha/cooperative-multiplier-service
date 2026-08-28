@@ -1,11 +1,12 @@
 import {
   BadRequestException,
   ConflictException,
+  ForbiddenException,
   Injectable,
   Logger,
   NotFoundException,
 } from '@nestjs/common';
-import { ApprovalDecision, LoanApplicationStatus } from '@prisma/client';
+import { ApprovalDecision, LoanApplicationStatus, UserRole } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { MultiplierService } from '../multiplier/multiplier.service';
 import { MultiplierQueueService } from '../queue/multiplier-queue.service';
@@ -114,6 +115,59 @@ export class LoansService {
       throw new NotFoundException(`Loan application ${id} not found`);
     }
     return application;
+  }
+
+  /**
+   * Ownership-checked read for GET /loans/applications/:id (P1-2). The bare
+   * getLoanApplication above stays unchecked because directorDecision,
+   * financeDecision, and withdrawApplication all call it internally after
+   * doing their own, stricter checks.
+   *
+   * Until 2026-08-24 this endpoint carried MobileJwtGuard alone, so any
+   * authenticated member could enumerate ids and read every other member's
+   * requested amount, notes, and financeNotes.
+   *
+   * Who may read one:
+   *   FINANCE_MANAGER  — anything; they make the final decision.
+   *   the applicant    — their own request.
+   *   a DIRECTOR       — while it is awaiting director approval (they may
+   *                      need to vote, and cannot vote on an amount they
+   *                      cannot see), or afterwards if they voted on it.
+   *
+   * A director who never voted cannot read a decided application. That keeps
+   * one member's borrowing history from being browsable by another after the
+   * governance need has passed.
+   */
+  async getLoanApplicationFor(
+    applicationId: number,
+    user: { role: UserRole; clientId: number | null },
+  ) {
+    const application = await this.getLoanApplication(applicationId);
+
+    if (user.role === UserRole.FINANCE_MANAGER) {
+      return application;
+    }
+
+    if (user.clientId !== null && application.clientId === user.clientId) {
+      return application;
+    }
+
+    if (user.role === UserRole.DIRECTOR) {
+      const awaitingDirectors =
+        application.status === LoanApplicationStatus.PENDING_DIRECTOR_APPROVAL;
+      const alreadyVoted = application.approvals.some(
+        (a) => a.directorClientId === user.clientId,
+      );
+      if (awaitingDirectors || alreadyVoted) {
+        return application;
+      }
+    }
+
+    // Deliberately the same shape of refusal whether or not the application
+    // exists, so ids cannot be enumerated by comparing 403 against 404.
+    throw new ForbiddenException(
+      'You may not view this loan application',
+    );
   }
 
   async listLoanApplicationsForClient(clientId: number) {
