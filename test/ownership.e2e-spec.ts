@@ -63,6 +63,11 @@ describe('Ownership matrix (e2e)', () => {
 
   beforeAll(async () => {
     process.env.JWT_ACCESS_SECRET = JWT_SECRET;
+    // The suites below fire ~100 requests from one IP in a few seconds. The
+    // production default (120/min) would start returning 429 as they grow,
+    // producing failures that look like auth bugs but are not. Raise it here;
+    // the login-specific limit is a decorator constant and still applies.
+    process.env.THROTTLE_LIMIT = '10000';
     process.env.WEBHOOK_SHARED_SECRET = 'ownership-e2e-webhook-secret';
     process.env.ADMIN_API_KEY = 'ownership-e2e-admin-key';
 

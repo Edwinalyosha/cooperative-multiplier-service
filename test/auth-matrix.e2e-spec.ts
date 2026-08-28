@@ -163,6 +163,11 @@ describe('Auth matrix (e2e)', () => {
     // cares about. Setting it here mirrors production and exercises the real
     // rejection path: 401 for a missing or wrong secret.
     process.env.WEBHOOK_SHARED_SECRET = WEBHOOK_TEST_SECRET;
+    // The suites below fire ~100 requests from one IP in a few seconds. The
+    // production default (120/min) would start returning 429 as they grow,
+    // producing failures that look like auth bugs but are not. Raise it here;
+    // the login-specific limit is a decorator constant and still applies.
+    process.env.THROTTLE_LIMIT = '10000';
     process.env.ADMIN_API_KEY = ADMIN_TEST_KEY;
     process.env.REPORTS_API_KEY = REPORTS_TEST_KEY;
     // Required: MobileJwtStrategy refuses to construct without it, so the

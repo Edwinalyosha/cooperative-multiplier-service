@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 import { APP_GUARD } from '@nestjs/core';
-import { ConfigModule } from '@nestjs/config';
+import { ConfigModule, ConfigService } from '@nestjs/config';
+import { ThrottlerGuard, ThrottlerModule } from '@nestjs/throttler';
 import { AppController } from './app.controller';
 import { AppService } from './app.service';
 import configuration from './config/configuration';
@@ -25,6 +26,18 @@ import { RolesGuard } from './mobile-auth/guards/roles.guard';
       isGlobal: true,
       load: [configuration],
     }),
+    ThrottlerModule.forRootAsync({
+      inject: [ConfigService],
+      useFactory: (config: ConfigService) => ({
+        throttlers: [
+          {
+            name: 'default',
+            ttl: config.get<number>('throttle.ttlSeconds', 60) * 1000,
+            limit: config.get<number>('throttle.limit', 120),
+          },
+        ],
+      }),
+    }),
     PrismaModule,
     FineractModule,
     MultiplierModule,
@@ -42,15 +55,20 @@ import { RolesGuard } from './mobile-auth/guards/roles.guard';
   providers: [
     AppService,
     /**
-     * Authentication is opt-OUT, not opt-in. Every route requires a valid
-     * JWT unless it carries @Public(); see MobileJwtGuard for why.
+     * Guard order is registration order, and it matters here.
      *
-     * Order matters: MobileJwtGuard attaches request.user, and RolesGuard
-     * reads it. Nest runs APP_GUARDs in registration order.
+     * ThrottlerGuard runs FIRST, before authentication: rejecting a flood
+     * should be the cheapest thing this service does, rather than verifying
+     * a JWT on every request of an attack.
      *
-     * RolesGuard is safe to apply globally — it passes through any route
-     * with no @Roles() metadata.
+     * Then authentication is opt-OUT, not opt-in — every route requires a
+     * valid JWT unless it carries @Public(). See MobileJwtGuard for why.
+     *
+     * RolesGuard runs last because it reads request.user, which
+     * MobileJwtGuard attaches. It is safe to apply globally: any route with
+     * no @Roles() metadata passes straight through.
      */
+    { provide: APP_GUARD, useClass: ThrottlerGuard },
     { provide: APP_GUARD, useClass: MobileJwtGuard },
     { provide: APP_GUARD, useClass: RolesGuard },
   ],

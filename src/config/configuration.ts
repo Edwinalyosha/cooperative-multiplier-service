@@ -58,6 +58,30 @@ export default () => ({
     /** Read-only reporting. Safe to hand to an accountant or a dashboard. */
     reportsKey: process.env.REPORTS_API_KEY,
   },
+  /**
+   * Rate limiting. The login limit is deliberately much tighter than the
+   * general one: mobile login validates the password against Fineract's own
+   * /authentication, so a brute-force attempt does not just hammer this
+   * service — it hammers Fineract, and can trip Fineract's own account
+   * lockouts for the member being guessed at.
+   */
+  throttle: {
+    ttlSeconds: parseInt(process.env.THROTTLE_TTL_SECONDS ?? '60', 10),
+    limit: parseInt(process.env.THROTTLE_LIMIT ?? '120', 10),
+    // Login limits are NOT configurable here: @Throttle takes its arguments
+    // at class-decoration time, before ConfigService exists. They are constants
+    // in the two login controllers (5 attempts / 5 minutes). Env entries for
+    // them would be dead config that reads as live.
+  },
+  /**
+   * Swagger publishes a complete, self-documenting index of every endpoint
+   * and which ones carry auth. Defaults to OFF: must be switched on
+   * explicitly, and only in an environment where that map is not a gift to
+   * anyone scanning the host.
+   */
+  swagger: {
+    enabled: process.env.SWAGGER_ENABLED === 'true',
+  },
   webhooks: {
     /**
      * Shared secret n8n presents on the Fineract webhook receivers.

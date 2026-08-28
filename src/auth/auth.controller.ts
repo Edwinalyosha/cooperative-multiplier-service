@@ -5,12 +5,16 @@ import { LoginDto } from './dto/login.dto';
 import { CreateUserDto } from './dto/create-user.dto';
 import { AdminApiKeyGuard } from './guards/api-key.guard';
 import { Public } from './decorators/public.decorator';
+import { Throttle } from '@nestjs/throttler';
 
 @ApiTags('auth')
 @Controller('auth')
 export class AuthController {
   constructor(private readonly authService: AuthService) {}
 
+  // Hands out ADMIN_API_KEY, which mints logins mapped to any member's
+  // clientId. Guessing at it deserves the same treatment as member login.
+  @Throttle({ default: { limit: 5, ttl: 300_000 } })
   @Public() // this IS the login
   @Post('login')
   @ApiOperation({ summary: 'Obtain API access token (env-based until OAuth)' })
