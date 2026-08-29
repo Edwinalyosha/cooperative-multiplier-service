@@ -345,6 +345,26 @@ export class FineractService {
   }
 
   /**
+   * Total still owed across a member's active loans, interest included.
+   *
+   * This is what reduces their borrowing headroom, so it is deliberately the
+   * BALANCE rather than the original principal: a member who borrowed 80,000
+   * owes 90,381 once interest is applied, and the fund is exposed for the
+   * larger figure.
+   *
+   * Returns 0 for a member with no loans. Throws if Fineract cannot be read —
+   * callers must not mistake an outage for "owes nothing".
+   */
+  async getOutstandingLoanBalance(clientId: number): Promise<number> {
+    const accounts = await this.getClientAccounts(clientId);
+    if (!accounts?.loanAccounts?.length) return 0;
+
+    return accounts.loanAccounts
+      .filter((loan) => loan.status?.active !== false)
+      .reduce((total, loan) => total + Number(loan.loanBalance ?? 0), 0);
+  }
+
+  /**
    * Live product config (rate, term defaults) — fetched fresh each time
    * rather than cached/hardcoded, so a manual rate edit in Fineract (like
    * the Tier2 fix made 2026-08-10) is always reflected without a

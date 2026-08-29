@@ -76,7 +76,7 @@ export class LoansService {
    * information is the safe direction, the same rule the contribution sweep
    * follows when it declines to mark a member late it could not read.
    */
-  private async assertNoExistingBorrowing(clientId: number): Promise<void> {
+  private async assertNoOpenApplication(clientId: number): Promise<void> {
     const openApplication = await this.prisma.loanApplication.findFirst({
       where: { clientId, status: { in: OPEN_APPLICATION_STATUSES } },
       orderBy: { id: 'desc' },
@@ -89,29 +89,43 @@ export class LoansService {
           'before you can apply again.',
       );
     }
+  }
 
-    let activeLoanIds: number[];
+  /**
+   * How much a member may still borrow: their limit less what they already
+   * owe.
+   *
+   * An outstanding loan does NOT bar borrowing — it consumes headroom. A
+   * member with a 109,450 limit and 90,381 outstanding may still borrow
+   * 19,069, and repaying restores the room. This is the difference between a
+   * credit limit and a lockout, and it is the cooperative's intent.
+   *
+   * Throws rather than assuming zero debt when Fineract cannot be read:
+   * treating an outage as "owes nothing" would hand out a member's full limit
+   * on top of a loan they already have.
+   */
+  private async getAvailableHeadroom(
+    clientId: number,
+    maxLoanAmount: number,
+  ): Promise<{ outstanding: number; available: number }> {
+    let outstanding: number;
     try {
-      activeLoanIds = await this.fineract.getActiveLoanIds(clientId);
+      outstanding = await this.fineract.getOutstandingLoanBalance(clientId);
     } catch (error) {
       this.logger.error(
-        `Could not check active loans for client ${clientId}; refusing the ` +
-          `application rather than assuming no outstanding debt: ` +
+        `Could not read outstanding loans for client ${clientId}; refusing ` +
+          'the application rather than assuming no debt: ' +
           redactFineractError(error),
       );
       throw new BadRequestException(
-        'Could not confirm whether you have an outstanding loan. Please try ' +
-          'again shortly.',
+        'Could not confirm your outstanding balance. Please try again shortly.',
       );
     }
 
-    if (activeLoanIds.length > 0) {
-      throw new ConflictException(
-        'You already have an outstanding loan ' +
-          `(Fineract loan ${activeLoanIds.join(', ')}). It must be fully ` +
-          'repaid before you can borrow again.',
-      );
-    }
+    return {
+      outstanding,
+      available: Math.max(0, maxLoanAmount - outstanding),
+    };
   }
 
   /**
@@ -123,7 +137,7 @@ export class LoansService {
    * creates the LoanApplication record awaiting director approval.
    */
   async applyForLoan(clientId: number, dto: ApplyLoanDto) {
-    await this.assertNoExistingBorrowing(clientId);
+    await this.assertNoOpenApplication(clientId);
 
     const eligibility = await this.multiplierService.getEligibility(clientId);
 
@@ -133,9 +147,19 @@ export class LoansService {
       );
     }
 
-    if (dto.requestedAmount > eligibility.maxLoanAmount) {
+    const { outstanding, available } = await this.getAvailableHeadroom(
+      clientId,
+      eligibility.maxLoanAmount,
+    );
+
+    if (dto.requestedAmount > available) {
       throw new BadRequestException(
-        `Requested amount ${dto.requestedAmount} exceeds current eligibility of ${eligibility.maxLoanAmount}.`,
+        outstanding > 0
+          ? `Requested amount ${dto.requestedAmount} exceeds your available ` +
+            `limit of ${available} (limit ${eligibility.maxLoanAmount} less ` +
+            `${outstanding} still owed on an existing loan).`
+          : `Requested amount ${dto.requestedAmount} exceeds current ` +
+            `eligibility of ${eligibility.maxLoanAmount}.`,
       );
     }
 

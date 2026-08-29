@@ -25,13 +25,13 @@ describe('lending limits', () => {
   const CLIENT = 2;
 
   let openApplication: { id: number; status: string } | null;
-  let activeLoanIds: number[];
-  let activeLoansThrow: Error | null;
+  let outstanding: number;
+  let outstandingThrow: Error | null;
 
   function build() {
     openApplication = null;
-    activeLoanIds = [];
-    activeLoansThrow = null;
+    outstanding = 0;
+    outstandingThrow = null;
 
     const prisma = {
       loanApplication: {
@@ -46,9 +46,9 @@ describe('lending limits', () => {
 
     const fineract = {
       isConfigured: () => true,
-      getActiveLoanIds: jest.fn(async () => {
-        if (activeLoansThrow) throw activeLoansThrow;
-        return activeLoanIds;
+      getOutstandingLoanBalance: jest.fn(async () => {
+        if (outstandingThrow) throw outstandingThrow;
+        return outstanding;
       }),
       getContributionBalance: jest.fn(async () => 0),
       getLoanProduct: jest.fn(async () => ({
@@ -107,33 +107,76 @@ describe('lending limits', () => {
     });
   });
 
-  describe('one outstanding loan at a time', () => {
-    it('refuses a new application while a disbursed loan is unpaid', async () => {
+  describe('outstanding debt consumes headroom, it does not lock out', () => {
+    // The limit is 109,450 throughout (balance 50,000 x multiple 2.189).
+
+    it('lets a member borrow the room left above what they owe', async () => {
+      // 109,450 limit less 50,000 owed = 59,450 available.
       const service = build();
-      activeLoanIds = [10];
+      outstanding = 50000;
 
       await expect(
-        service.applyForLoan(CLIENT, { requestedAmount: 80000 } as never),
-      ).rejects.toBeInstanceOf(ConflictException);
-    });
-
-    it('allows borrowing again once nothing is outstanding', async () => {
-      // The block must clear itself on repayment. An APPROVED row lives in
-      // our table forever, so it must not be what bars the member.
-      const service = build();
-      activeLoanIds = [];
-
-      await expect(
-        service.applyForLoan(CLIENT, { requestedAmount: 80000 } as never),
+        service.applyForLoan(CLIENT, { requestedAmount: 55000 } as never),
       ).resolves.toBeDefined();
     });
 
-    it('refuses to lend when Fineract cannot be read', async () => {
-      // Silence is not evidence of no debt. Refusing on missing information
-      // is the safe direction — the same rule the contribution sweep uses
-      // when it declines to mark a member late it could not read.
+    it('leaves headroom below the tier minimum unusable', async () => {
+      // 109,450 less 90,381 owed leaves 19,069 — real headroom, but Tier 1
+      // starts at 50,000, so nothing can be borrowed against it. Documented
+      // rather than worked around: the tier floor is a deliberate policy and
+      // the member is told why, but it does mean small remainders are dead.
       const service = build();
-      activeLoansThrow = new Error('ECONNREFUSED');
+      outstanding = 90381;
+
+      await expect(
+        service.applyForLoan(CLIENT, { requestedAmount: 19000 } as never),
+      ).rejects.toThrow(/does not fall within any loan tier/);
+    });
+
+    it('refuses an amount above the remaining room', async () => {
+      const service = build();
+      outstanding = 90381;
+
+      await expect(
+        service.applyForLoan(CLIENT, { requestedAmount: 25000 } as never),
+      ).rejects.toBeInstanceOf(BadRequestException);
+    });
+
+    it('explains the shortfall in terms of the existing loan', async () => {
+      const service = build();
+      outstanding = 90381;
+
+      await expect(
+        service.applyForLoan(CLIENT, { requestedAmount: 25000 } as never),
+      ).rejects.toThrow(/still owed on an existing loan/);
+    });
+
+    it('restores the full limit once the loan is repaid', async () => {
+      const service = build();
+      outstanding = 0;
+
+      await expect(
+        service.applyForLoan(CLIENT, { requestedAmount: 109450 } as never),
+      ).resolves.toBeDefined();
+    });
+
+    it('never offers negative headroom when debt exceeds the limit', async () => {
+      // A limit can fall (savings withdrawn, multiplier worsened) below what
+      // is already owed. That must read as "nothing available", not as a
+      // negative that some later arithmetic could flip.
+      const service = build();
+      outstanding = 200000;
+
+      await expect(
+        service.applyForLoan(CLIENT, { requestedAmount: 1 } as never),
+      ).rejects.toBeInstanceOf(BadRequestException);
+    });
+
+    it('refuses to lend when Fineract cannot be read', async () => {
+      // Silence is not evidence of no debt. Treating an outage as "owes
+      // nothing" would hand out a full limit on top of an existing loan.
+      const service = build();
+      outstandingThrow = new Error('ECONNREFUSED');
 
       await expect(
         service.applyForLoan(CLIENT, { requestedAmount: 80000 } as never),
