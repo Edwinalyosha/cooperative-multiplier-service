@@ -29,6 +29,23 @@ import {
  */
 const DIRECTOR_QUORUM = 2;
 
+/**
+ * Application states meaning "this member already has a request in play".
+ * The cooperative's rule is one at a time: an application must be decided
+ * before the next is made, or a member can queue several and drain their
+ * whole limit the moment they are approved.
+ *
+ * APPROVED is deliberately NOT listed. Once disbursed, the block comes from
+ * Fineract's active-loan list instead — that clears itself when the loan is
+ * repaid, whereas this row stays APPROVED forever and would bar the member
+ * permanently.
+ */
+const OPEN_APPLICATION_STATUSES = [
+  LoanApplicationStatus.PENDING_DIRECTOR_APPROVAL,
+  LoanApplicationStatus.PENDING_FINANCE_APPROVAL,
+  LoanApplicationStatus.APPROVED_PENDING_DISBURSEMENT,
+];
+
 @Injectable()
 export class LoansService {
   private readonly logger = new Logger(LoansService.name);
@@ -41,6 +58,63 @@ export class LoansService {
   ) {}
 
   /**
+   * One loan at a time.
+   *
+   * Eligibility is `contributionBalance x loanMultiple` and subtracts nothing
+   * for money already borrowed, so without this a member could apply
+   * repeatedly and hold several full-limit loans at once against the same
+   * savings. Observed live on 2026-08-29: client 2 held a disbursed 80,000
+   * loan and an open 90,000 application simultaneously, on a 50,000 balance,
+   * and was still offered another 109,450.
+   *
+   * Two separate blocks, because they answer different questions:
+   *  - an OPEN APPLICATION means a decision is still pending here;
+   *  - an ACTIVE LOAN means money is outstanding in Fineract.
+   *
+   * Fineract is authoritative for the second. If it cannot be reached this
+   * throws rather than assuming no debt — refusing to lend on missing
+   * information is the safe direction, the same rule the contribution sweep
+   * follows when it declines to mark a member late it could not read.
+   */
+  private async assertNoExistingBorrowing(clientId: number): Promise<void> {
+    const openApplication = await this.prisma.loanApplication.findFirst({
+      where: { clientId, status: { in: OPEN_APPLICATION_STATUSES } },
+      orderBy: { id: 'desc' },
+    });
+
+    if (openApplication) {
+      throw new ConflictException(
+        `You already have loan application #${openApplication.id} awaiting a ` +
+          `decision (status: ${openApplication.status}). It must be decided ` +
+          'before you can apply again.',
+      );
+    }
+
+    let activeLoanIds: number[];
+    try {
+      activeLoanIds = await this.fineract.getActiveLoanIds(clientId);
+    } catch (error) {
+      this.logger.error(
+        `Could not check active loans for client ${clientId}; refusing the ` +
+          `application rather than assuming no outstanding debt: ` +
+          redactFineractError(error),
+      );
+      throw new BadRequestException(
+        'Could not confirm whether you have an outstanding loan. Please try ' +
+          'again shortly.',
+      );
+    }
+
+    if (activeLoanIds.length > 0) {
+      throw new ConflictException(
+        'You already have an outstanding loan ' +
+          `(Fineract loan ${activeLoanIds.join(', ')}). It must be fully ` +
+          'repaid before you can borrow again.',
+      );
+    }
+  }
+
+  /**
    * Phase 2 — POST /loans/apply. Snapshots eligibility, auto-selects the
    * Fineract loan tier from requestedAmount, computes the effective rate
    * (tier base rate x director's currentMultiplier, locked at origination
@@ -49,6 +123,8 @@ export class LoansService {
    * creates the LoanApplication record awaiting director approval.
    */
   async applyForLoan(clientId: number, dto: ApplyLoanDto) {
+    await this.assertNoExistingBorrowing(clientId);
+
     const eligibility = await this.multiplierService.getEligibility(clientId);
 
     if (!eligibility.isEligible) {
@@ -197,6 +273,45 @@ export class LoansService {
    * decided 2026-08-10); the SECOND approval advances the application to
    * PENDING_FINANCE_APPROVAL. See context/loan-approval-workflow-spec.md.
    */
+  /**
+   * The first approver's savings must cover the full principal.
+   *
+   * Rolls back the caller's vote row on refusal, for the same reason the
+   * addGuarantor failure path does: the row had to be written first to win
+   * the guarantor race safely, and leaving it would record a vote against a
+   * loan with no guarantor while the unique constraint blocked any retry.
+   */
+  private async assertGuarantorCanCover(
+    directorClientId: number,
+    principal: number,
+    approvalRowId: number,
+  ): Promise<void> {
+    const rollback = () =>
+      this.prisma.loanApproval.delete({ where: { id: approvalRowId } });
+
+    let balance: number | null;
+    try {
+      balance = await this.fineract.getContributionBalance(directorClientId);
+    } catch (error) {
+      await rollback();
+      throw new BadRequestException(
+        `Could not read director ${directorClientId}'s savings to confirm ` +
+          'guarantor capacity, so the guarantee was not recorded' +
+          describeFineractError(error),
+      );
+    }
+
+    if (balance == null || balance < principal) {
+      await rollback();
+      throw new BadRequestException(
+        `Director ${directorClientId} cannot guarantee this loan: their ` +
+          `savings (${balance ?? 0}) do not cover the principal ` +
+          `(${principal}). A director with sufficient savings must approve ` +
+          'first — they become the guarantor.',
+      );
+    }
+  }
+
   async directorDecision(
     applicationId: number,
     directorClientId: number,
@@ -278,6 +393,18 @@ export class LoansService {
     let guarantorMessage: string | null = null;
 
     if (isFirstApproval && application.fineractLoanId) {
+      // A guarantor is "responsible for ensuring the borrower repays", so
+      // their own savings must cover the whole principal — otherwise the
+      // guarantee is nominal and the fund carries the risk it was meant to
+      // transfer. Checked here rather than at vote time because only the
+      // FIRST approver takes the liability, and that is not known until the
+      // locked transaction above has resolved it.
+      await this.assertGuarantorCanCover(
+        directorClientId,
+        Number(application.requestedAmount),
+        approvalRow.id,
+      );
+
       try {
         await this.fineract.addGuarantor({
           loanId: application.fineractLoanId,
