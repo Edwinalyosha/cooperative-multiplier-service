@@ -9,6 +9,11 @@ import { QueueModule } from '../queue/queue.module';
 import { PrismaModule } from '../prisma/prisma.module';
 import { LoansModule } from '../loans/loans.module';
 import { ContributionsModule } from '../contributions/contributions.module';
+// SavingsHoldReleaseScheduler reads Fineract directly to decide whether a
+// loan is still outstanding. Nothing else here imports it — MultiplierModule
+// and ContributionsModule export only their own services — so omitting this
+// fails at BOOT, not at the first cron fire.
+import { FineractModule } from '../fineract/fineract.module';
 
 /**
  * StreakScheduler was REMOVED 2026-08-28. It awarded the consecutive-on-time
@@ -38,6 +43,7 @@ import { ContributionsModule } from '../contributions/contributions.module';
     QueueModule,
     LoansModule,
     ContributionsModule,
+    FineractModule,
   ],
   providers: [
     EligibilityScheduler,
