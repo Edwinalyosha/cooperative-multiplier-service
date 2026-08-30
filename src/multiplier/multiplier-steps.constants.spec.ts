@@ -33,6 +33,10 @@ const REWARDS = [
   // than LATE_CONTRIBUTION so a missed-then-paid week is still a net loss —
   // see contribution-ledger.spec.ts, which asserts that ordering.
   MultiplierEventType.ARREARS_CLEARED,
+  // A late loan installment finally paid. A reward, but smaller than
+  // LATE_REPAYMENT so being late and paying never beats paying on time —
+  // asserted in repayment-assessment.spec.ts.
+  MultiplierEventType.LATE_REPAYMENT_CLEARED,
 ];
 
 const PENALTIES = [

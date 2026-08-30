@@ -178,13 +178,21 @@ export class ContributionLedgerService {
 
       if (charged.count > 0) {
         penaltyCharged = true;
-        await this.multiplier.processEvent(
+        const applied = await this.multiplier.processEvent(
           clientId,
           MultiplierEventType.LATE_CONTRIBUTION,
           'contribution-ledger',
           `Missed the ${period.startDate} contribution ` +
             `(${thisWeekPaid} of ${amountDue})`,
         );
+
+        // Record what was ACTUALLY charged so a later waiver reverses exactly
+        // that. It is 0 under shadow mode and may differ from today's
+        // configured step.
+        await this.prisma.contributionPeriod.update({
+          where: { id: current.id },
+          data: { penaltyStep: applied.stepAmount },
+        });
       } else {
         this.logger.debug(
           `Client ${clientId} was already penalised for ${period.startDate}; ` +
@@ -249,6 +257,76 @@ export class ContributionLedgerService {
       arrearsTotal: arrears,
       arrearsWeeks,
     };
+  }
+
+  /**
+   * Forgives a late week: reverses the penalty and records who did it and why.
+   *
+   * The cooperative will sometimes want this — genuine hardship, a member who
+   * was away, a first lapse while a new rule beds in. Without it the only
+   * choices are charging everyone or charging nobody.
+   *
+   * Reverses the amount ACTUALLY charged, read from the row. Under shadow
+   * mode that is 0, so waiving a trial-period penalty correctly moves nothing
+   * while still marking it forgiven.
+   *
+   * The debt is NOT cleared. A waiver forgives the multiplier penalty, not the
+   * money — the member still owes the contribution. Cancelling both would need
+   * to be a separate, deliberate decision.
+   */
+  async waivePenalty(
+    clientId: number,
+    periodStart: string,
+    waivedBy: number,
+    reason: string,
+  ): Promise<{ waived: boolean; reversed: number }> {
+    const period = await this.prisma.contributionPeriod.findUnique({
+      where: {
+        clientId_periodStart: { clientId, periodStart: new Date(periodStart) },
+      },
+    });
+
+    if (!period || period.penaltyAppliedAt == null) {
+      return { waived: false, reversed: 0 };
+    }
+
+    // `waivedAt: null` in the WHERE makes a repeat a no-op rather than a
+    // second reversal — the same guard the charge itself uses.
+    const claimed = await this.prisma.contributionPeriod.updateMany({
+      where: { id: period.id, waivedAt: null },
+      data: { waivedAt: new Date(), waivedBy, waiveReason: reason },
+    });
+
+    if (claimed.count === 0) return { waived: false, reversed: 0 };
+
+    const charged = Number(period.penaltyStep ?? 0);
+    await this.multiplier.reversePenalty(
+      clientId,
+      charged,
+      `Late contribution for the week of ${periodStart} forgiven: ${reason}`,
+      'contribution-waiver',
+    );
+
+    return { waived: true, reversed: charged };
+  }
+
+  /** Late weeks whose penalty still stands — what a finance manager can
+   * forgive. */
+  async listWaivablePenalties(clientId: number) {
+    const rows = await this.prisma.contributionPeriod.findMany({
+      where: { clientId, penaltyAppliedAt: { not: null }, waivedAt: null },
+      orderBy: { periodStart: 'desc' },
+    });
+
+    return rows.map((row) => ({
+      periodStart: toDateString(row.periodStart),
+      amountDue: Number(row.amountDue),
+      amountPaid: Number(row.amountPaid),
+      penaltyStep: Number(row.penaltyStep ?? 0),
+      penalisedAt: row.penaltyAppliedAt,
+      /** 0 means it was recorded during the trial period and never charged. */
+      wasCharged: Number(row.penaltyStep ?? 0) > 0,
+    }));
   }
 
   /** What this member still owes across every unpaid week. */

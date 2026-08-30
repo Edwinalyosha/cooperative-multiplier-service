@@ -158,8 +158,12 @@ describe('contribution ledger', () => {
       processEvent: jest.fn(
         async (clientId: number, eventType: MultiplierEventType) => {
           events.push({ clientId, eventType });
+          // The ledger records what was ACTUALLY applied, so a later waiver
+          // can reverse exactly that.
+          return { stepAmount: MULTIPLIER_STEPS[eventType] };
         },
       ),
+      reversePenalty: jest.fn(async () => undefined),
     } as unknown as MultiplierService;
 
     return new ContributionLedgerService(prisma, multiplier);

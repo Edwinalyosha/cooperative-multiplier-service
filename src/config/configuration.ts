@@ -117,6 +117,29 @@ export default () => ({
      * is not disadvantaged — contributions alone carry the full 1-5x.
      */
     savingsFactor: optionalFloat(process.env.SAVINGS_FACTOR) ?? 1.2,
+    /**
+     * SHADOW MODE. Before this date, penalties are RECORDED but not APPLIED —
+     * the sweeps run exactly as normal, ledger rows are written, arrears
+     * accrue and the member sees "counted late" in their history, but their
+     * multiplier does not move.
+     *
+     * The point is a gentle introduction: penalising lateness is not the
+     * cooperative's current mode of operation, so members get a real trial
+     * against their own behaviour before anyone is charged, and the
+     * cooperative finds out whether the thresholds are fair before they cost
+     * anybody money.
+     *
+     * REWARDS still apply throughout. There is no harm in a member benefiting
+     * during the trial, and it makes the change feel like a gain rather than
+     * a threat.
+     *
+     * A period shadowed is never charged later: the ledger still stamps
+     * penaltyAppliedAt, so switching this off does not retroactively bill
+     * anyone for the trial weeks.
+     *
+     * Unset means penalties apply immediately.
+     */
+    penaltiesActiveFrom: process.env.PENALTIES_ACTIVE_FROM,
     steps: {
       ON_TIME_CONTRIBUTION: optionalFloat(process.env.STEP_ON_TIME_CONTRIBUTION),
       CONSECUTIVE_ON_TIME_CONTRIBUTIONS: optionalFloat(

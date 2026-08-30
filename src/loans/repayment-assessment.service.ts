@@ -95,6 +95,11 @@ export class RepaymentAssessmentService {
   ): Promise<void> {
     const schedule = await this.fineract.getRepaymentSchedule(fineractLoanId);
 
+    // A late installment that has since been paid earns the catch-up reward,
+    // once. Checked before assessing new installments so a member who pays
+    // several arrears at once is credited for each.
+    await this.awardClearedArrears(clientId, fineractLoanId, schedule);
+
     for (const installment of schedule) {
       // Nothing to judge until the due date has passed. A member with days
       // left has not failed at anything.
@@ -127,7 +132,7 @@ export class RepaymentAssessmentService {
         continue;
       }
 
-      await this.multiplier.processEvent(
+      const applied = await this.multiplier.processEvent(
         clientId,
         onTime
           ? MultiplierEventType.ON_TIME_REPAYMENT
@@ -143,9 +148,121 @@ export class RepaymentAssessmentService {
               : ' and is still unpaid'),
       );
 
+      // What was ACTUALLY applied — 0 under shadow mode — so a later waiver
+      // reverses exactly that rather than today's configured step.
+      await this.prisma.repaymentAssessment.updateMany({
+        where: { fineractLoanId, installmentNumber: installment.installment },
+        data: { stepApplied: applied.stepAmount },
+      });
+
       if (onTime) result.assessedOnTime++;
       else result.assessedLate++;
     }
+  }
+
+  /**
+   * Rewards a late installment that has since been paid off.
+   *
+   * Symmetric with ARREARS_CLEARED on contributions: being late and then
+   * paying should be better than never paying, and worse than never being
+   * late. LATE_REPAYMENT_CLEARED (-0.010) against LATE_REPAYMENT (+0.030)
+   * leaves a net +0.020, between the on-time -0.018 and the unpaid +0.030.
+   *
+   * `clearedAt: null` in the WHERE is the once-only guard, so a member who
+   * stays paid up does not collect this every night.
+   */
+  private async awardClearedArrears(
+    clientId: number,
+    fineractLoanId: number,
+    schedule: { installment: number; metOn: string | null }[],
+  ): Promise<void> {
+    const outstanding = await this.prisma.repaymentAssessment.findMany({
+      where: {
+        fineractLoanId,
+        outcome: 'LATE',
+        clearedAt: null,
+        waivedAt: null,
+      },
+      select: { id: true, installmentNumber: true },
+    });
+
+    for (const row of outstanding) {
+      const installment = schedule.find(
+        (s) => s.installment === row.installmentNumber,
+      );
+      if (!installment?.metOn) continue; // still unpaid
+
+      const claimed = await this.prisma.repaymentAssessment.updateMany({
+        where: { id: row.id, clearedAt: null },
+        data: { clearedAt: new Date() },
+      });
+      if (claimed.count === 0) continue;
+
+      await this.multiplier.processEvent(
+        clientId,
+        MultiplierEventType.LATE_REPAYMENT_CLEARED,
+        'repayment-sweep',
+        `Late installment ${row.installmentNumber} of loan ${fineractLoanId} ` +
+          `has now been paid (${installment.metOn})`,
+      );
+    }
+  }
+
+  /**
+   * Forgives a late installment: reverses the penalty, records who and why.
+   *
+   * Reverses the amount ACTUALLY applied, which is 0 for anything assessed
+   * during the shadow period. The debt to Fineract is untouched — a waiver
+   * forgives the multiplier penalty, not the money.
+   */
+  async waivePenalty(
+    assessmentId: number,
+    waivedBy: number,
+    reason: string,
+  ): Promise<{ waived: boolean; reversed: number }> {
+    const assessment = await this.prisma.repaymentAssessment.findUnique({
+      where: { id: assessmentId },
+    });
+
+    if (!assessment || assessment.outcome !== 'LATE') {
+      return { waived: false, reversed: 0 };
+    }
+
+    const claimed = await this.prisma.repaymentAssessment.updateMany({
+      where: { id: assessmentId, waivedAt: null },
+      data: { waivedAt: new Date(), waivedBy, waiveReason: reason },
+    });
+    if (claimed.count === 0) return { waived: false, reversed: 0 };
+
+    const charged = Number(assessment.stepApplied ?? 0);
+    await this.multiplier.reversePenalty(
+      assessment.clientId,
+      charged,
+      `Late installment ${assessment.installmentNumber} of loan ` +
+        `${assessment.fineractLoanId} forgiven: ${reason}`,
+      'repayment-waiver',
+    );
+
+    return { waived: true, reversed: charged };
+  }
+
+  /** Late installments whose penalty still stands — what can be forgiven. */
+  async listWaivablePenalties(clientId: number) {
+    const rows = await this.prisma.repaymentAssessment.findMany({
+      where: { clientId, outcome: 'LATE', waivedAt: null },
+      orderBy: { dueDate: 'desc' },
+    });
+
+    return rows.map((row) => ({
+      id: row.id,
+      fineractLoanId: row.fineractLoanId,
+      installmentNumber: row.installmentNumber,
+      dueDate: row.dueDate.toISOString().slice(0, 10),
+      metOn: row.metOn ? row.metOn.toISOString().slice(0, 10) : null,
+      stepApplied: Number(row.stepApplied ?? 0),
+      /** 0 means recorded during the trial period and never charged. */
+      wasCharged: Number(row.stepApplied ?? 0) > 0,
+    }));
   }
 }
 

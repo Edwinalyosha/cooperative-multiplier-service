@@ -3,6 +3,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { FineractService } from '../fineract/fineract.service';
 import { MultiplierService } from '../multiplier/multiplier.service';
 import { MultiplierEventType } from '../multiplier/multiplier-event.enum';
+import { MULTIPLIER_STEPS } from '../multiplier/multiplier-steps.constants';
 
 /**
  * Whether a loan installment was repaid on time.
@@ -32,11 +33,19 @@ describe('repayment assessment', () => {
   let existing: Set<string>;
   let events: { clientId: number; eventType: MultiplierEventType }[];
   let scheduleThrow: Error | null;
+  /** Stand-in for the RepaymentAssessment table. */
+  let rows: {
+    id: number;
+    installmentNumber: number;
+    outcome: string;
+    clearedAt: Date | null;
+  }[];
 
   function build(directors = [{ clientId: CLIENT }]) {
     schedule = [];
     existing = new Set();
     events = [];
+    rows = [];
     scheduleThrow = null;
 
     const prisma = {
@@ -44,13 +53,40 @@ describe('repayment assessment', () => {
       repaymentAssessment: {
         create: jest.fn(async (args: never) => {
           const a = args as unknown as {
-            data: { fineractLoanId: number; installmentNumber: number };
+            data: {
+              fineractLoanId: number;
+              installmentNumber: number;
+              outcome: string;
+            };
           };
           const key = `${a.data.fineractLoanId}:${a.data.installmentNumber}`;
           // Stands in for the unique constraint — the actual guarantee.
           if (existing.has(key)) throw new Error('duplicate key');
           existing.add(key);
+          rows.push({
+            id: rows.length + 1,
+            installmentNumber: a.data.installmentNumber,
+            outcome: a.data.outcome,
+            clearedAt: null,
+          });
           return a.data;
+        }),
+        // Late installments not yet credited with the catch-up reward.
+        findMany: jest.fn(async () =>
+          rows.filter((r) => r.outcome === 'LATE' && r.clearedAt === null),
+        ),
+        updateMany: jest.fn(async (args: never) => {
+          const a = args as unknown as {
+            where: { id?: number; clearedAt?: null };
+            data: { clearedAt?: Date; stepApplied?: number };
+          };
+          const row = rows.find((r) => r.id === a.where.id);
+          if (!row) return { count: 0 };
+          if ('clearedAt' in a.where && row.clearedAt !== null) {
+            return { count: 0 };
+          }
+          if (a.data.clearedAt) row.clearedAt = a.data.clearedAt;
+          return { count: 1 };
         }),
       },
     } as unknown as PrismaService;
@@ -68,8 +104,10 @@ describe('repayment assessment', () => {
       processEvent: jest.fn(
         async (clientId: number, eventType: MultiplierEventType) => {
           events.push({ clientId, eventType });
+          return { stepAmount: MULTIPLIER_STEPS[eventType] };
         },
       ),
+      reversePenalty: jest.fn(async () => undefined),
     } as unknown as MultiplierService;
 
     return new RepaymentAssessmentService(prisma, fineract, multiplier);
@@ -199,6 +237,67 @@ describe('repayment assessment', () => {
 
       expect(count(MultiplierEventType.LATE_REPAYMENT)).toBe(1);
       expect(count(MultiplierEventType.ON_TIME_REPAYMENT)).toBe(0);
+    });
+  });
+
+  describe('paying off a late installment', () => {
+    it('awards the catch-up reward once it is paid', async () => {
+      const service = build();
+      schedule = [installment(1, '2026-08-20', null)];
+      await service.sweep(NOW);
+
+      schedule = [installment(1, '2026-08-20', '2026-08-29')];
+      await service.sweep(NOW);
+
+      expect(count(MultiplierEventType.LATE_REPAYMENT_CLEARED)).toBe(1);
+    });
+
+    it('awards it exactly once, however often the sweep runs', async () => {
+      const service = build();
+      schedule = [installment(1, '2026-08-20', null)];
+      await service.sweep(NOW);
+
+      schedule = [installment(1, '2026-08-20', '2026-08-29')];
+      await service.sweep(NOW);
+      await service.sweep(NOW);
+      await service.sweep(NOW);
+
+      expect(count(MultiplierEventType.LATE_REPAYMENT_CLEARED)).toBe(1);
+    });
+
+    it('does not award it while the installment is still unpaid', async () => {
+      const service = build();
+      schedule = [installment(1, '2026-08-20', null)];
+      await service.sweep(NOW);
+      await service.sweep(NOW);
+
+      expect(count(MultiplierEventType.LATE_REPAYMENT_CLEARED)).toBe(0);
+    });
+
+    it('never awards it for an installment that was paid on time', async () => {
+      const service = build();
+      schedule = [installment(1, '2026-08-20', '2026-08-19')];
+      await service.sweep(NOW);
+      await service.sweep(NOW);
+
+      expect(count(MultiplierEventType.LATE_REPAYMENT_CLEARED)).toBe(0);
+    });
+
+    it('keeps being late worse than never being late', () => {
+      // The ordering the whole reward depends on. If the catch-up ever
+      // exceeded the penalty, deliberately missing a payment and settling it
+      // later would be a net GAIN. Asserted against the money, so a future
+      // edit has to disagree with the arithmetic and not just a table.
+      const onTime = MULTIPLIER_STEPS[MultiplierEventType.ON_TIME_REPAYMENT];
+      const late = MULTIPLIER_STEPS[MultiplierEventType.LATE_REPAYMENT];
+      const cleared =
+        MULTIPLIER_STEPS[MultiplierEventType.LATE_REPAYMENT_CLEARED];
+
+      const lateThenPaid = late + cleared;
+
+      expect(lateThenPaid).toBeGreaterThan(0);        // still a net loss
+      expect(lateThenPaid).toBeLessThan(late);        // better than never paying
+      expect(lateThenPaid).toBeGreaterThan(onTime);   // worse than paying on time
     });
   });
 

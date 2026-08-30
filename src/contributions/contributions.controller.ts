@@ -7,6 +7,7 @@ import {
   ParseIntPipe,
   Post,
   Query,
+  Req,
 } from '@nestjs/common';
 import { ApiOperation, ApiQuery, ApiTags } from '@nestjs/swagger';
 import { UserRole } from '@prisma/client';
@@ -15,6 +16,8 @@ import { ContributionsService } from './contributions.service';
 import { RecordContributionDto } from './dto/record-contribution.dto';
 import { SeedOpeningArrearsDto } from './dto/seed-opening-arrears.dto';
 import { RecordDepositDto } from './dto/record-deposit.dto';
+import { WaivePenaltyDto } from './dto/waive-penalty.dto';
+import { MobileJwtPayload } from '../mobile-auth/strategies/mobile-jwt.strategy';
 import { ContributionLedgerService } from './contribution-ledger.service';
 
 @ApiTags('contributions')
@@ -127,6 +130,41 @@ export class ContributionsController {
     @Body() dto: SeedOpeningArrearsDto,
   ) {
     return this.ledger.seedOpeningArrears(clientId, dto.weeks);
+  }
+
+  @Roles(UserRole.FINANCE_MANAGER)
+  @Get(':clientId/penalties')
+  @ApiOperation({
+    summary:
+      'Late weeks whose penalty still stands, newest first. `wasCharged` is ' +
+      'false for weeks recorded during the trial period — those can be ' +
+      'marked forgiven but there is no multiplier movement to reverse.',
+  })
+  penalties(@Param('clientId', ParseIntPipe) clientId: number) {
+    return this.ledger.listWaivablePenalties(clientId);
+  }
+
+  @Roles(UserRole.FINANCE_MANAGER)
+  @Post(':clientId/penalties/:periodStart/waive')
+  @ApiOperation({
+    summary:
+      'Forgive a late contribution. Reverses the exact penalty that was ' +
+      'applied and records who forgave it and why, visible in the member ' +
+      "history. Does NOT clear the debt — the contribution is still owed; " +
+      'cancelling that is a separate decision.',
+  })
+  waiveContributionPenalty(
+    @Param('clientId', ParseIntPipe) clientId: number,
+    @Param('periodStart') periodStart: string,
+    @Body() dto: WaivePenaltyDto,
+    @Req() req: { user: MobileJwtPayload },
+  ) {
+    return this.ledger.waivePenalty(
+      clientId,
+      periodStart,
+      req.user.sub,
+      dto.reason,
+    );
   }
 
   @Roles(UserRole.FINANCE_MANAGER)

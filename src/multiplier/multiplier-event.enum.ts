@@ -8,6 +8,10 @@ export enum MultiplierEventType {
   ARREARS_CLEARED = 'ARREARS_CLEARED',
 
   LATE_REPAYMENT = 'LATE_REPAYMENT',
+  /** A late installment has now been paid. Rewards catching up, but smaller
+   * than the on-time reward so being late and paying is never as good as
+   * paying on time. */
+  LATE_REPAYMENT_CLEARED = 'LATE_REPAYMENT_CLEARED',
   ON_TIME_REPAYMENT = 'ON_TIME_REPAYMENT',
 
   EARLY_FULL_PAYOFF = 'EARLY_FULL_PAYOFF',

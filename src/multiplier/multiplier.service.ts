@@ -184,6 +184,73 @@ export class MultiplierService {
   }
 
   /**
+   * Reverses a penalty that was applied, because the cooperative has decided
+   * to forgive it.
+   *
+   * Takes the exact amount that was charged — recorded on the ledger row at
+   * the time — rather than recomputing it. Steps are configurable and shadow
+   * mode applies 0, so today's value may not be what this member paid.
+   *
+   * Deliberately NOT a general "adjust a multiplier" API. The only caller is a
+   * waiver, the amount comes from a stored fact, and a waived row is stamped
+   * so it cannot be reversed twice. An endpoint that accepted a free step
+   * would be the most powerful thing in the system: it sets everyone's
+   * interest rate.
+   *
+   * Written to history as PENALTY_WAIVED — a raw string rather than a member
+   * of MultiplierEventType, because that enum's contract is that every value
+   * has a FIXED step in MULTIPLIER_STEPS, and this one is variable by nature.
+   */
+  async reversePenalty(
+    clientId: number,
+    chargedStep: number,
+    notes: string,
+    triggeredBy: string,
+  ): Promise<void> {
+    if (chargedStep <= 0) {
+      // Nothing was charged — a shadow-mode penalty, or a row from before
+      // steps were recorded. The waiver is still stamped by the caller; there
+      // is simply no movement to undo.
+      this.logger.log(
+        `Waiver for client ${clientId} moved nothing: ${chargedStep} was ` +
+          'applied originally.',
+      );
+      return;
+    }
+
+    const director = await this.ensureDirector(clientId);
+    const oldMultiplier = Number(director.currentMultiplier);
+    const updatedMultiplier = this.clampMultiplier(oldMultiplier - chargedStep);
+    const newLoanMultiple = this.calculateLoanMultiple(updatedMultiplier);
+
+    await this.prisma.directorMultiplier.update({
+      where: { clientId },
+      data: {
+        currentMultiplier: updatedMultiplier,
+        loanMultiple: newLoanMultiple,
+      },
+    });
+
+    await this.prisma.multiplierHistory.create({
+      data: {
+        clientId,
+        eventType: 'PENALTY_WAIVED',
+        oldMultiplier,
+        newMultiplier: updatedMultiplier,
+        stepAmount: -chargedStep,
+        direction: 'UPGRADE',
+        triggeredBy,
+        notes,
+      },
+    });
+
+    this.logger.log(
+      `Waived ${chargedStep} for client ${clientId}: ${oldMultiplier} -> ` +
+        `${updatedMultiplier}. ${notes}`,
+    );
+  }
+
+  /**
    * A member's ownership share of the cooperative: their contributions as a
    * percentage of everyone's.
    *
@@ -268,6 +335,41 @@ export class MultiplierService {
     }
 
     return configured;
+  }
+
+  /**
+   * Is this a penalty we are recording but not yet charging?
+   *
+   * Shadow mode: before PENALTIES_ACTIVE_FROM, penalties are recorded in full
+   * — the sweeps run, ledger rows are written, arrears accrue, the member
+   * sees "counted late" — but the multiplier does not move. It gives members
+   * a real trial against their own behaviour before anyone is charged.
+   *
+   * Rewards are never shadowed. There is no harm in a member benefiting
+   * during the trial, and it makes the change feel like a gain rather than a
+   * threat.
+   *
+   * An unparseable date is treated as "not in shadow" and logged. Failing
+   * towards charging is the conservative reading of a config error here: the
+   * alternative silently suspends every penalty indefinitely, which nobody
+   * would notice.
+   */
+  private isShadowed(step: number): boolean {
+    if (step <= 0) return false; // rewards and no-ops are never shadowed
+
+    const activeFrom = this.config.get<string>('multiplier.penaltiesActiveFrom');
+    if (!activeFrom) return false;
+
+    const from = new Date(activeFrom);
+    if (Number.isNaN(from.getTime())) {
+      this.logger.error(
+        `PENALTIES_ACTIVE_FROM is not a valid date ("${activeFrom}"); ` +
+          'applying penalties normally.',
+      );
+      return false;
+    }
+
+    return Date.now() < from.getTime();
   }
 
   /**
@@ -606,10 +708,25 @@ export class MultiplierService {
   ): Promise<ProcessEventResponse> {
     const director = await this.ensureDirector(clientId);
     const oldMultiplier = Number(director.currentMultiplier);
-    const step = this.stepFor(eventType);
+    const configuredStep = this.stepFor(eventType);
+
+    // Shadow mode: record the event in full but move nothing. The member sees
+    // it in their history, the ledger still stamps the period as assessed —
+    // so it is never charged later — and their multiplier is untouched.
+    const shadowed = this.isShadowed(configuredStep);
+    const step = shadowed ? 0 : configuredStep;
+
+    const shadowNote = shadowed
+      ? ` (trial period — recorded as ${configuredStep > 0 ? '+' : ''}` +
+        `${configuredStep}, not applied)`
+      : '';
+
     const updatedMultiplier = this.clampMultiplier(oldMultiplier + step);
     const newLoanMultiple = this.calculateLoanMultiple(updatedMultiplier);
     const direction = this.resolveDirection(step);
+    // Streak state still advances under shadow: a member's run of on-time
+    // contributions is a fact about their behaviour, not about whether the
+    // penalty was charged.
     const statusUpdate = this.buildStatusUpdate(eventType);
 
     const updatedDirector = await this.prisma.directorMultiplier.update({
@@ -630,7 +747,7 @@ export class MultiplierService {
         stepAmount: step,
         direction,
         triggeredBy,
-        notes,
+        notes: notes ? `${notes}${shadowNote}` : shadowNote || undefined,
       },
     });
 

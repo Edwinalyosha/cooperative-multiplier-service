@@ -77,9 +77,30 @@ export const MULTIPLIER_STEPS: Record<MultiplierEventType, number> = {
   ARREARS_CLEARED: -0.005,
 
   // Loan repayments
-  ON_TIME_REPAYMENT: -0.01,
+  /**
+   * Per installment. Loan products run 24 MONTHLY installments, so this is
+   * roughly 0.0042 per week alongside the weekly contribution — enough to
+   * matter without swamping contributions, which remain the primary driver.
+   *
+   * Break-even for repayments is 0.030 / (0.030 + 0.018) = 62.5%, deliberately
+   * stricter than the 57.7% for contributions: this is the cooperative's money
+   * at risk, not the member's own.
+   */
+  ON_TIME_REPAYMENT: -0.018,
   /** Worse than a late contribution: this is money already lent out. */
   LATE_REPAYMENT: 0.03,
+  /**
+   * A late installment finally paid. MUST stay smaller in magnitude than
+   * LATE_REPAYMENT, or being late and paying becomes better than never being
+   * late at all. At -0.010 against +0.030 the ordering is:
+   *
+   *   on time        -0.018   (best)
+   *   late, paid     +0.020   (worse than on time, better than never paying)
+   *   late, unpaid   +0.030   (worst)
+   *
+   * Asserted in repayment-assessment.spec.ts.
+   */
+  LATE_REPAYMENT_CLEARED: -0.01,
 
   // Strong reward
   EARLY_FULL_PAYOFF: -0.03,
@@ -91,6 +112,7 @@ export const REWARD_EVENTS: readonly MultiplierEventType[] = [
   MultiplierEventType.CONSECUTIVE_ON_TIME_CONTRIBUTIONS,
   MultiplierEventType.ARREARS_CLEARED,
   MultiplierEventType.ON_TIME_REPAYMENT,
+  MultiplierEventType.LATE_REPAYMENT_CLEARED,
   MultiplierEventType.EARLY_FULL_PAYOFF,
 ];
 

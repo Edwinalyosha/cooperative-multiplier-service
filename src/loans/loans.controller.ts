@@ -20,13 +20,18 @@ import { FinanceDecisionDto } from './dto/finance-decision.dto';
 import { MobileJwtGuard } from '../mobile-auth/guards/mobile-jwt.guard';
 import { ClientOwnershipGuard } from '../mobile-auth/guards/client-ownership.guard';
 import { RolesGuard } from '../mobile-auth/guards/roles.guard';
+import { RepaymentAssessmentService } from './repayment-assessment.service';
+import { WaivePenaltyDto } from '../contributions/dto/waive-penalty.dto';
 import { Roles } from '../mobile-auth/decorators/roles.decorator';
 import { MobileJwtPayload } from '../mobile-auth/strategies/mobile-jwt.strategy';
 
 @ApiTags('loans')
 @Controller('loans')
 export class LoansController {
-  constructor(private readonly loansService: LoansService) {}
+  constructor(
+    private readonly loansService: LoansService,
+    private readonly repaymentAssessment: RepaymentAssessmentService,
+  ) {}
 
   @Post('apply')
   @UseGuards(MobileJwtGuard, RolesGuard)
@@ -72,6 +77,42 @@ export class LoansController {
     return this.loansService.listPendingMyDecision(
       req.user.role,
       req.user.clientId,
+    );
+  }
+
+  @Get('repayments/:clientId/penalties')
+  @UseGuards(MobileJwtGuard, RolesGuard)
+  @Roles(UserRole.FINANCE_MANAGER)
+  @ApiBearerAuth()
+  @ApiOperation({
+    summary:
+      'Late installments whose penalty still stands. `wasCharged` is false ' +
+      'for any assessed during the trial period — those can be marked ' +
+      'forgiven but there is no multiplier movement to reverse.',
+  })
+  listRepaymentPenalties(@Param('clientId', ParseIntPipe) clientId: number) {
+    return this.repaymentAssessment.listWaivablePenalties(clientId);
+  }
+
+  @Post('repayments/penalties/:assessmentId/waive')
+  @UseGuards(MobileJwtGuard, RolesGuard)
+  @Roles(UserRole.FINANCE_MANAGER)
+  @ApiBearerAuth()
+  @ApiOperation({
+    summary:
+      'Forgive a late installment. Reverses the exact penalty applied and ' +
+      'records who forgave it and why. Does NOT alter the loan — the money ' +
+      'is still owed to Fineract.',
+  })
+  waiveRepaymentPenalty(
+    @Param('assessmentId', ParseIntPipe) assessmentId: number,
+    @Body() dto: WaivePenaltyDto,
+    @Req() req: { user: MobileJwtPayload },
+  ) {
+    return this.repaymentAssessment.waivePenalty(
+      assessmentId,
+      req.user.sub,
+      dto.reason,
     );
   }
 

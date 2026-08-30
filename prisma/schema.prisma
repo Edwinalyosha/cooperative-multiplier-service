@@ -83,6 +83,16 @@ model ContributionPeriod {
   /// constraint below plus this field are what guarantee one penalty per
   /// missed week.
   penaltyAppliedAt       DateTime?
+  /// The step actually charged, stored so a waiver can reverse EXACTLY that
+  /// rather than assuming today's configured value. It may differ: the step
+  /// is configurable, and under shadow mode it is 0.
+  penaltyStep            Decimal?  @db.Decimal(10, 3)
+  /// A penalty forgiven by the finance manager. The multiplier movement is
+  /// reversed and a PENALTY_WAIVED entry appears in the member's history, so
+  /// "who forgave what, and why" is always answerable.
+  waivedAt               DateTime?
+  waivedBy               Int?
+  waiveReason            String?
   /// Set exactly once, when a week that WAS in arrears is fully paid.
   arrearsRewardAppliedAt DateTime?
   satisfiedAt            DateTime?
@@ -118,6 +128,18 @@ model RepaymentAssessment {
   metOn             DateTime? @db.Date
   /// ON_TIME | LATE
   outcome           String
+  /// The step actually applied, so a waiver reverses exactly that — it may
+  /// differ from today's configured value, and is 0 under shadow mode.
+  stepApplied       Decimal? @db.Decimal(10, 3)
+
+  /// Set once when a LATE installment is later paid off, so the catch-up
+  /// reward is awarded exactly once.
+  clearedAt         DateTime?
+
+  /// A penalty forgiven by the finance manager.
+  waivedAt          DateTime?
+  waivedBy          Int?
+  waiveReason       String?
 
   assessedAt        DateTime @default(now())
 
