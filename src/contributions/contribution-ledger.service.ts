@@ -114,32 +114,40 @@ export class ContributionLedgerService {
       }
 
       if (allocation.satisfied) {
-        // A week that had already been penalised and is now paid off earns
-        // the catch-up reward — once. `arrearsRewardAppliedAt: null` in the
-        // WHERE makes a concurrent or repeated run a no-op rather than a
-        // second award.
-        const wasInArrears = row.penaltyAppliedAt != null;
-        const updated = await this.prisma.contributionPeriod.updateMany({
-          where: {
-            id: row.id,
-            ...(wasInArrears ? { arrearsRewardAppliedAt: null } : {}),
-          },
+        // Settling the week and awarding the catch-up bonus are two separate
+        // writes on purpose. Guarding the settlement on
+        // `arrearsRewardAppliedAt: null` would leave any row that is not
+        // eligible for a reward permanently unsettled — it would sit in
+        // arrears, absorb the same allocation every week, and never close.
+        // That is precisely the shape of an opening balance seeded at launch,
+        // which carries no reward because the debt predates the system.
+        await this.prisma.contributionPeriod.update({
+          where: { id: row.id },
           data: {
             amountPaid: allocation.amountPaid,
             status: STATUS_SATISFIED,
             satisfiedAt: now,
-            ...(wasInArrears ? { arrearsRewardAppliedAt: now } : {}),
           },
         });
 
-        if (wasInArrears && updated.count > 0) {
-          arrearsCleared.push(allocation.periodStart);
-          await this.multiplier.processEvent(
-            clientId,
-            MultiplierEventType.ARREARS_CLEARED,
-            'contribution-ledger',
-            `Cleared the missed week of ${allocation.periodStart}`,
-          );
+        // The reward is for clearing a week the member was actually penalised
+        // for. `arrearsRewardAppliedAt: null` in the WHERE makes a repeated
+        // or concurrent run a no-op rather than a second award.
+        if (row.penaltyAppliedAt != null && row.arrearsRewardAppliedAt == null) {
+          const awarded = await this.prisma.contributionPeriod.updateMany({
+            where: { id: row.id, arrearsRewardAppliedAt: null },
+            data: { arrearsRewardAppliedAt: now },
+          });
+
+          if (awarded.count > 0) {
+            arrearsCleared.push(allocation.periodStart);
+            await this.multiplier.processEvent(
+              clientId,
+              MultiplierEventType.ARREARS_CLEARED,
+              'contribution-ledger',
+              `Cleared the missed week of ${allocation.periodStart}`,
+            );
+          }
         }
       } else {
         // Short of the amount due. The money still counts against the debt —

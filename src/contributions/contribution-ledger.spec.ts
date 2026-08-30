@@ -254,6 +254,26 @@ describe('contribution ledger', () => {
       expect(count(MultiplierEventType.ARREARS_CLEARED)).toBe(0);
     });
 
+    it('settles a week that earns no reward, instead of leaving it open', async () => {
+      // An opening balance seeded at launch carries no catch-up reward: the
+      // debt predates the system, so it was never penalised and must not be
+      // rewarded. It must still SETTLE when paid — guarding the settlement on
+      // the reward would leave it absorbing the same money every week and
+      // never closing.
+      const ledger = build([
+        row('2026-08-17', {
+          status: 'ARREARS',
+          penaltyAppliedAt: new Date('2026-08-17'),
+          arrearsRewardAppliedAt: new Date('2026-08-17'),
+        }),
+      ]);
+
+      await ledger.assessPeriod(CLIENT, WEEK, DUE, DUE * 2);
+
+      expect(count(MultiplierEventType.ARREARS_CLEARED)).toBe(0);
+      expect(await ledger.getArrears(CLIENT)).toBe(0);
+    });
+
     it('leaves a partially-backfilled week still owing', async () => {
       const ledger = build([
         row('2026-08-17', { status: 'ARREARS',
