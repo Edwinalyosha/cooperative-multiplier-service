@@ -12,8 +12,14 @@ export class MobileService {
   ) {}
 
   async getDashboard(clientId: number) {
-    const [profile, eligibility, recentHistory, fineractBalance, ownership] =
-      await Promise.all([
+    const [
+      profile,
+      eligibility,
+      recentHistory,
+      fineractBalance,
+      ownership,
+      outstandingLoanBalance,
+    ] = await Promise.all([
         this.multiplierService.getProfile(clientId),
         this.multiplierService
           .getEligibility(clientId)
@@ -23,6 +29,12 @@ export class MobileService {
         // Never fatal: a member should still get their dashboard if the share
         // calculation fails.
         this.multiplierService.getOwnershipShare(clientId).catch(() => null),
+        // What they currently owe. null means "could not read", which the UI
+        // must show differently from 0 — telling a borrower they owe nothing
+        // because Fineract was briefly down would be worse than saying so.
+        this.fineractService
+          .getOutstandingLoanBalance(clientId)
+          .catch(() => null),
       ]);
 
     return {
@@ -31,6 +43,7 @@ export class MobileService {
       eligibility,
       fineractContributionBalance: fineractBalance,
       ownership,
+      outstandingLoanBalance,
       recentHistory,
       tips: this.buildTips(profile, eligibility),
     };
