@@ -1,15 +1,59 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Logger } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { FineractService } from '../fineract/fineract.service';
 import { MultiplierService } from '../multiplier/multiplier.service';
 import { ReportsService } from '../reports/reports.service';
+import { ContributionLedgerService } from '../contributions/contribution-ledger.service';
+import { currentWeek } from '../contributions/contribution-period.util';
 
 @Injectable()
 export class MobileService {
+  private readonly logger = new Logger(MobileService.name);
+
   constructor(
     private readonly multiplierService: MultiplierService,
     private readonly fineractService: FineractService,
     private readonly reportsService: ReportsService,
+    private readonly ledger: ContributionLedgerService,
+    private readonly config: ConfigService,
   ) {}
+
+  /**
+   * The week in progress: what is owed, what has been paid so far, and how
+   * long is left.
+   *
+   * Returns null rather than throwing when Fineract cannot be read. A member
+   * should still get their dashboard, and "we could not check" must be
+   * distinguishable in the UI from "you have paid nothing" — the second is an
+   * accusation, and making it on the strength of an outage would be wrong.
+   */
+  async getThisWeek(clientId: number, now: Date = new Date()) {
+    const period = currentWeek(now);
+    const amountDue =
+      this.config.get<number>('multiplier.weeklyContributionMinimum') ?? 20000;
+
+    try {
+      const deposits = await this.fineractService.getDepositsBetween(
+        clientId,
+        period.startDate,
+        period.endDate,
+      );
+      const paid = deposits.reduce((sum, d) => sum + d.amount, 0);
+      return await this.ledger.getThisWeek(
+        clientId,
+        amountDue,
+        paid,
+        period,
+        now,
+      );
+    } catch (error) {
+      this.logger.warn(
+        `Could not read this week's contributions for client ${clientId}: ` +
+          `${(error as Error)?.message ?? 'unknown error'}`,
+      );
+      return null;
+    }
+  }
 
   async getDashboard(clientId: number) {
     const [
@@ -19,6 +63,7 @@ export class MobileService {
       fineractBalance,
       ownership,
       outstandingLoanBalance,
+      thisWeek,
     ] = await Promise.all([
         this.multiplierService.getProfile(clientId),
         this.multiplierService
@@ -35,6 +80,7 @@ export class MobileService {
         this.fineractService
           .getOutstandingLoanBalance(clientId)
           .catch(() => null),
+        this.getThisWeek(clientId),
       ]);
 
     return {
@@ -44,9 +90,15 @@ export class MobileService {
       fineractContributionBalance: fineractBalance,
       ownership,
       outstandingLoanBalance,
+      thisWeek,
       recentHistory,
       tips: this.buildTips(profile, eligibility),
     };
+  }
+
+  /** Every unpaid week, oldest first — "what I still owe". */
+  getArrears(clientId: number) {
+    return this.ledger.listArrears(clientId);
   }
 
   getOwnershipShare(clientId: number) {

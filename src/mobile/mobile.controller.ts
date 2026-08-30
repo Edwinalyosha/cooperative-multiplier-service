@@ -42,6 +42,26 @@ export class MobileController {
     return this.mobileService.getDashboard(clientId);
   }
 
+  @Get('contributions/:clientId/this-week')
+  @ApiOperation({
+    summary:
+      'The contribution week in progress — what is owed, what has been paid ' +
+      'so far, days remaining, and any arrears carried from earlier weeks.',
+  })
+  thisWeek(@Param('clientId', ParseIntPipe) clientId: number) {
+    return this.mobileService.getThisWeek(clientId);
+  }
+
+  @Get('contributions/:clientId/arrears')
+  @ApiOperation({
+    summary:
+      'Every unpaid week, oldest first. A missed week is deferred without ' +
+      'interest, not forgiven.',
+  })
+  arrears(@Param('clientId', ParseIntPipe) clientId: number) {
+    return this.mobileService.getArrears(clientId);
+  }
+
   @Get('ownership/:clientId')
   @ApiOperation({
     summary:

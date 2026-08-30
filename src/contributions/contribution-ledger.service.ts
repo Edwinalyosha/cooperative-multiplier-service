@@ -197,6 +197,52 @@ export class ContributionLedgerService {
     };
   }
 
+  /**
+   * What the member sees on their home screen: the week in progress, and
+   * anything still owed from before.
+   *
+   * The current week has no ledger row — rows are created when a week closes
+   * — so the amount paid is read live from Fineract. That is deliberate: the
+   * value of this view is that a member notices they are short WHILE they can
+   * still do something about it.
+   *
+   * `paidSoFar` is measured against deposits made during this week only.
+   * Money paid this week goes to this week first (see allocatePayment), so
+   * counting it here matches what will happen when the week closes.
+   */
+  async getThisWeek(
+    clientId: number,
+    amountDue: number,
+    depositsThisWeek: number,
+    period: ContributionPeriod,
+    now: Date = new Date(),
+  ) {
+    const outstanding = Math.max(0, amountDue - depositsThisWeek);
+    const arrears = await this.getArrears(clientId);
+    const arrearsWeeks = await this.prisma.contributionPeriod.count({
+      where: { clientId, status: { in: [STATUS_OPEN, STATUS_ARREARS] } },
+    });
+
+    return {
+      periodStart: period.startDate,
+      periodEnd: period.endDate,
+      closesAt: period.closedAt,
+      /** Whole days left, rounded down; 0 on the final day. */
+      daysRemaining: Math.max(
+        0,
+        Math.floor((period.closedAt.getTime() - now.getTime()) / 86_400_000),
+      ),
+      amountDue,
+      paidSoFar: depositsThisWeek,
+      outstanding,
+      /** PAID | PARTIAL | UNPAID — the week is not judged until it closes. */
+      status:
+        outstanding === 0 ? 'PAID' : depositsThisWeek > 0 ? 'PARTIAL' : 'UNPAID',
+      arrearsTotal: arrears,
+      arrearsWeeks,
+    };
+  }
+
   /** What this member still owes across every unpaid week. */
   async getArrears(clientId: number): Promise<number> {
     const rows = await this.prisma.contributionPeriod.findMany({

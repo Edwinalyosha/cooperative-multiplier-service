@@ -1,5 +1,6 @@
 import {
   lastCompletedWeek,
+  currentWeek,
   wasOpenForWholePeriod,
   KAMPALA_UTC_OFFSET_HOURS,
 } from './contribution-period.util';
@@ -107,5 +108,63 @@ describe('wasOpenForWholePeriod', () => {
   it('treats an unknown opening date as long-standing', () => {
     // The alternative would silently drop existing members from the sweep.
     expect(wasOpenForWholePeriod(null, period)).toBe(true);
+  });
+});
+
+/**
+ * The week IN PROGRESS — what a member sees on their home screen.
+ *
+ * Same UTC+3 boundary hazard as lastCompletedWeek, and the same reason for
+ * testing it apart from any service: the offset sits exactly ON the
+ * Monday-midnight boundary, so between 21:00 and midnight UTC the server's
+ * date and Kampala's date disagree. Getting this wrong shows a member the
+ * wrong week's progress and tells them they are short when they are not.
+ */
+describe('currentWeek', () => {
+  it('returns the week containing a mid-week moment', () => {
+    // Thursday 27 Aug 2026, midday Kampala.
+    const period = currentWeek(new Date('2026-08-27T09:00:00Z'));
+    expect(period.startDate).toBe('2026-08-24');
+    expect(period.endDate).toBe('2026-08-30');
+  });
+
+  it('starts a new week at Monday 00:00 Kampala, not UTC', () => {
+    // 21:00 UTC Sunday IS Monday 00:00 in Kampala — the new week has begun
+    // for the member even though it is still Sunday for the server.
+    const period = currentWeek(new Date('2026-08-30T21:00:00Z'));
+    expect(period.startDate).toBe('2026-08-31');
+  });
+
+  it('still reports the old week an hour before that boundary', () => {
+    // 20:00 UTC Sunday = 23:00 Sunday Kampala. Same week, one hour left.
+    const period = currentWeek(new Date('2026-08-30T20:00:00Z'));
+    expect(period.startDate).toBe('2026-08-24');
+    expect(period.endDate).toBe('2026-08-30');
+  });
+
+  it('reports Monday as the first day of its own week', () => {
+    const period = currentWeek(new Date('2026-08-24T09:00:00Z'));
+    expect(period.startDate).toBe('2026-08-24');
+  });
+
+  it('reports Sunday as the last day of its own week', () => {
+    const period = currentWeek(new Date('2026-08-30T09:00:00Z'));
+    expect(period.endDate).toBe('2026-08-30');
+  });
+
+  it('closes exactly when the next week opens', () => {
+    // The instant this week closes must be the instant lastCompletedWeek
+    // starts counting from, or a moment could fall in both weeks or neither.
+    const now = new Date('2026-08-27T09:00:00Z');
+    const current = currentWeek(now);
+    const after = lastCompletedWeek(current.closedAt);
+
+    expect(after.startDate).toBe(current.startDate);
+    expect(after.endDate).toBe(current.endDate);
+  });
+
+  it('never overlaps the week that just closed', () => {
+    const now = new Date('2026-08-27T09:00:00Z');
+    expect(lastCompletedWeek(now).endDate < currentWeek(now).startDate).toBe(true);
   });
 });

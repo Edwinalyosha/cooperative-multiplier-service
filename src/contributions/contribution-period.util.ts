@@ -78,6 +78,44 @@ export function lastCompletedWeek(
 }
 
 /**
+ * The week currently IN PROGRESS, in Kampala terms.
+ *
+ * The counterpart to lastCompletedWeek, and the one a member sees. Nothing is
+ * judged here — no ledger row exists for a week that has not closed — but
+ * showing it is the whole point: a member should be able to see they are
+ * short with days left to fix it, rather than first learning of a miss when
+ * their multiplier moves.
+ *
+ * `closedAt` is when this week WILL close: next Monday 00:00 Kampala. That
+ * makes "how long do I have" a subtraction rather than another piece of
+ * calendar arithmetic at the call site.
+ */
+export function currentWeek(
+  now: Date,
+  offsetHours: number = KAMPALA_UTC_OFFSET_HOURS,
+): ContributionPeriod {
+  const offsetMs = offsetHours * 60 * 60 * 1000;
+  const local = new Date(now.getTime() + offsetMs);
+
+  const localMidnight = Date.UTC(
+    local.getUTCFullYear(),
+    local.getUTCMonth(),
+    local.getUTCDate(),
+  );
+
+  const daysSinceMonday = (local.getUTCDay() + 6) % 7;
+  const thisWeekStart = localMidnight - daysSinceMonday * MS_PER_DAY;
+  const thisWeekEnd = thisWeekStart + 6 * MS_PER_DAY; // the Sunday
+  const nextWeekStart = thisWeekStart + 7 * MS_PER_DAY;
+
+  return {
+    startDate: toYmd(new Date(thisWeekStart)),
+    endDate: toYmd(new Date(thisWeekEnd)),
+    closedAt: new Date(nextWeekStart - offsetMs),
+  };
+}
+
+/**
  * Was this account open for the WHOLE period?
  *
  * A member onboarded mid-week must not be marked late for a week they were
