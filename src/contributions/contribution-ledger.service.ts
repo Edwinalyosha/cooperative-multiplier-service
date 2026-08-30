@@ -80,6 +80,34 @@ export class ContributionLedgerService {
       update: {},
     });
 
+    // ALREADY ASSESSED — stop here.
+    //
+    // The guarantee is one assessment per week, not merely one penalty. A
+    // second run must not re-allocate the same deposits, and it must not
+    // re-fire the on-time reward.
+    //
+    // It also must not PENALISE a week it already satisfied, which is what
+    // happened on 2026-08-30: a satisfied period is excluded from the
+    // OPEN|ARREARS query below, so the allocation loop never ran,
+    // thisWeekSatisfied stayed at its initial false, and the penalty branch
+    // fired against a fully-paid week. The note it wrote gave it away —
+    // "Missed the contribution (20000 of 20000)".
+    const alreadyAssessed =
+      current.penaltyAppliedAt != null || current.status === STATUS_SATISFIED;
+
+    if (alreadyAssessed) {
+      return {
+        clientId,
+        periodStart: period.startDate,
+        amountDue,
+        amountPaid: Number(current.amountPaid),
+        satisfied: current.status === STATUS_SATISFIED,
+        penaltyCharged: false,
+        arrearsCleared: [],
+        arrearsRemaining: await this.getArrears(clientId),
+      };
+    }
+
     const outstanding = await this.prisma.contributionPeriod.findMany({
       where: { clientId, status: { in: [STATUS_OPEN, STATUS_ARREARS] } },
       orderBy: { periodStart: 'asc' },

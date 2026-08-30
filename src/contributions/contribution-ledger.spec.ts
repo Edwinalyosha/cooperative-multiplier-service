@@ -217,6 +217,60 @@ describe('contribution ledger', () => {
       expect(second.penaltyCharged).toBe(false);
     });
 
+    it('does not PENALISE a week it already satisfied', async () => {
+      // Found in production 2026-08-30. The scheduled Sunday sweep satisfied
+      // two weeks; a manual re-run minutes later penalised the same weeks,
+      // writing "Missed the contribution (20000 of 20000)".
+      //
+      // A satisfied period is excluded from the OPEN|ARREARS query, so the
+      // allocation loop never ran, thisWeekSatisfied stayed at its initial
+      // false, and the penalty branch fired against a fully-paid week. The
+      // earlier re-run tests all used an UNSATISFIED week, which takes a
+      // different path entirely.
+      const ledger = build();
+      await ledger.assessPeriod(CLIENT, WEEK, DUE, DUE);
+      await ledger.assessPeriod(CLIENT, WEEK, DUE, DUE);
+
+      expect(count(MultiplierEventType.LATE_CONTRIBUTION)).toBe(0);
+    });
+
+    it('does not re-reward a week it already satisfied', async () => {
+      // The mirror of the above: assessing twice must not pay twice.
+      const ledger = build();
+      await ledger.assessPeriod(CLIENT, WEEK, DUE, DUE);
+      await ledger.assessPeriod(CLIENT, WEEK, DUE, DUE);
+
+      expect(count(MultiplierEventType.ON_TIME_CONTRIBUTION)).toBe(1);
+    });
+
+    it('reports a satisfied re-run as satisfied, not as a fresh assessment', async () => {
+      const ledger = build();
+      await ledger.assessPeriod(CLIENT, WEEK, DUE, DUE);
+      const second = await ledger.assessPeriod(CLIENT, WEEK, DUE, DUE);
+
+      expect(second.satisfied).toBe(true);
+      expect(second.penaltyCharged).toBe(false);
+    });
+
+    it('does not re-allocate the same deposits to arrears on a re-run', async () => {
+      // The deeper reason a second assessment must be a no-op: assessPeriod
+      // ADDS the deposits it is given to what is already recorded. Running it
+      // twice would spend the same money twice, quietly clearing arrears
+      // nobody paid off.
+      const ledger = build([
+        row('2026-08-17', {
+          status: 'ARREARS',
+          penaltyAppliedAt: new Date('2026-08-17'),
+        }),
+      ]);
+
+      await ledger.assessPeriod(CLIENT, WEEK, DUE, DUE);
+      await ledger.assessPeriod(CLIENT, WEEK, DUE, DUE);
+
+      // The old week is still owed: only one week's money ever arrived.
+      expect(await ledger.getArrears(CLIENT)).toBe(DUE);
+    });
+
     it('is not fooled by an unrelated multiplier event', async () => {
       // The old time-based check skipped a member entirely if ANY event had
       // been recorded since the period closed — so a manually recorded

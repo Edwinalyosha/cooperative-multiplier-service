@@ -1,5 +1,6 @@
 import { BadRequestException, Injectable, Logger } from '@nestjs/common';
 import { FineractService } from '../fineract/fineract.service';
+import { describeFineractError } from '../fineract/fineract-error.util';
 import {
   TREASURY_MOVEMENTS,
   findMovement,
@@ -122,11 +123,42 @@ export class TreasuryService {
    * means a reversal is itself a permanent fact, so it deserves a reason.
    */
   async reverse(transactionId: string, reason: string): Promise<void> {
-    await this.fineract.reverseJournalEntry(
-      transactionId,
-      `Reversed: ${reason}`,
-    );
+    // A product-generated entry cannot be hand-reversed, and should not be:
+    // it belongs to a loan disbursement or a savings deposit, and undoing it
+    // means undoing THAT transaction on its own account, not editing the
+    // ledger underneath it. Fineract refuses, and without this the refusal
+    // reached the finance manager as a bare 500.
+    if (!(await this.isManualEntry(transactionId))) {
+      throw new BadRequestException(
+        `Transaction ${transactionId} was created by a loan or savings ` +
+          'account, not recorded here. It cannot be reversed from the books — ' +
+          'undo the underlying transaction on its own account instead.',
+      );
+    }
+
+    try {
+      await this.fineract.reverseJournalEntry(
+        transactionId,
+        `Reversed: ${reason}`,
+      );
+    } catch (error) {
+      throw new BadRequestException(
+        `Fineract would not reverse transaction ${transactionId}` +
+          describeFineractError(error),
+      );
+    }
+
     this.logger.warn(`Reversed journal transaction ${transactionId}: ${reason}`);
+  }
+
+  /** Was this posted from the Books tab, rather than by a product? */
+  private async isManualEntry(transactionId: string): Promise<boolean> {
+    const entries = await this.fineract.getJournalEntries(500);
+    const match = entries.find((e) => e.transactionId === transactionId);
+    // Unknown ids are let through: an entry older than the window we read is
+    // not evidence it was product-generated, and Fineract refuses anyway —
+    // now with a readable message.
+    return match ? match.manualEntry !== false : true;
   }
 
   /**
@@ -147,6 +179,7 @@ export class TreasuryService {
         amount: number;
         comments: string | null;
         reversed: boolean;
+        manual: boolean;
         debit: string | null;
         credit: string | null;
       }
@@ -159,6 +192,9 @@ export class TreasuryService {
         amount: Number(entry.amount ?? 0),
         comments: entry.comments ?? null,
         reversed: entry.reversed === true,
+        // Product-generated entries cannot be reversed from here, so the UI
+        // must not offer a button that can only fail.
+        manual: entry.manualEntry !== false,
         debit: null,
         credit: null,
       };

@@ -284,6 +284,11 @@ export class FineractService {
         );
         for (const tx of detail.transactions ?? []) {
           if (!tx.transactionType?.deposit) continue;
+          // Fineract keeps reversed transactions in the list. Counting one
+          // credits a member for money that was taken back — which is exactly
+          // what the reversed opening balances did on 2026-08-30, marking two
+          // members as having met a contribution they never paid.
+          if (tx.reversed) continue;
           const date = FineractService.parseFineractDate(tx.date);
           if (!date || date < startDate || date > endDate) continue;
           deposits.push({ date, amount: Number(tx.amount) || 0 });

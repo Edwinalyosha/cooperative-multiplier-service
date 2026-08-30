@@ -162,6 +162,13 @@ export interface FineractJournalEntry {
   amount?: number;
   comments?: string;
   reversed?: boolean;
+  /**
+   * False for entries a PRODUCT generated — a loan disbursement, a savings
+   * deposit. Fineract refuses to hand-reverse those, and rightly: they belong
+   * to a transaction that must be undone through its own account, not by
+   * editing the ledger underneath it.
+   */
+  manualEntry?: boolean;
   createdByUserName?: string;
 }
 
