@@ -22,7 +22,15 @@ model DirectorMultiplier {
   lastContributionStatus             String?
   lastRepaymentStatus                String?
 
+  /// Ownership stake, built from the weekly obligation. Earns the multiplier
+  /// and is leveraged 1-5x into maxLoanAmount. Basis for any later profit
+  /// split.
   contributionBalance                Decimal?  @db.Decimal(14, 2)
+  /// Voluntary, liquid savings. Adds to maxLoanAmount at face value
+  /// (savingsFactor) and confers no ownership — a member with none is not
+  /// disadvantaged. Separated from contributions 2026-08-29; null means it
+  /// has never been read from Fineract.
+  savingsBalance                     Decimal?  @db.Decimal(14, 2)
   maxLoanAmount                      Decimal?  @db.Decimal(14, 2)
   isEligible                         Boolean?  @default(false)
   eligibilityCheckedAt               DateTime?

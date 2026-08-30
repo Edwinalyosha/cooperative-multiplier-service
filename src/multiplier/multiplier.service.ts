@@ -7,6 +7,7 @@ const eligibilitySelect = {
   currentMultiplier: true,
   loanMultiple: true,
   contributionBalance: true,
+  savingsBalance: true,
   maxLoanAmount: true,
   isEligible: true,
   eligibilityCheckedAt: true,
@@ -18,6 +19,7 @@ interface DirectorEligibilityRow {
   currentMultiplier: Prisma.Decimal;
   loanMultiple: Prisma.Decimal;
   contributionBalance: Prisma.Decimal | null;
+  savingsBalance: Prisma.Decimal | null;
   maxLoanAmount: Prisma.Decimal | null;
   isEligible: boolean | null;
   eligibilityCheckedAt: Date | null;
@@ -28,12 +30,16 @@ function buildEligibilityUpdateData(
   maxLoanAmount: number,
   isEligible: boolean,
   eligibilityCheckedAt: Date,
+  savingsBalance: number | null,
 ): Prisma.DirectorMultiplierUpdateInput {
   return {
     contributionBalance,
     maxLoanAmount,
     isEligible,
     eligibilityCheckedAt,
+    // Left untouched when null, so a Fineract read that could not report
+    // savings does not erase the last known figure.
+    ...(savingsBalance == null ? {} : { savingsBalance }),
   } as unknown as Prisma.DirectorMultiplierUpdateInput;
 }
 import { ConfigService } from '@nestjs/config';
@@ -78,6 +84,9 @@ export interface EligibilityResponse {
   multiplier: number;
   loanMultiple: number;
   contributionBalance: number;
+  /** Ordinary savings, counted at savingsFactor. 0 when the member has no
+   * savings account or no savings product is configured. */
+  savingsBalance: number;
   maxLoanAmount: number;
   cappedAtMax: boolean;
   isEligible: boolean;
@@ -106,16 +115,35 @@ export class MultiplierService {
     return Number(result.toFixed(3));
   }
 
+  /**
+   * `limit = contributions x loanMultiple + savings x savingsFactor`
+   *
+   * The two balances are rewarded differently on purpose. Contributions are
+   * the ownership stake: committed capital, so they are leveraged 1-5x and
+   * they alone move the multiplier. Savings are voluntary and withdrawable,
+   * so they add capacity at face value and nothing more.
+   *
+   * A member with no savings account is not disadvantaged — contributions
+   * alone carry the full multiple. Savings are a way to raise a limit
+   * quickly, never a requirement for a good one.
+   */
   calculateMaxLoanAmount(
     contributionBalance: number,
     loanMultiple: number,
+    savingsBalance = 0,
   ): { maxLoanAmount: number; cappedAtMax: boolean } {
-    const raw = Math.floor(contributionBalance * loanMultiple);
+    const fromContributions = contributionBalance * loanMultiple;
+    const fromSavings = savingsBalance * this.savingsFactor;
+    const raw = Math.floor(fromContributions + fromSavings);
     const cappedAtMax = raw > MAX_LOAN_AMOUNT;
     return {
       maxLoanAmount: Math.min(raw, MAX_LOAN_AMOUNT),
       cappedAtMax,
     };
+  }
+
+  private get savingsFactor(): number {
+    return this.config.get<number>('multiplier.savingsFactor') ?? 1.0;
   }
 
   private get minEligibleLoan(): number {
@@ -307,9 +335,12 @@ export class MultiplierService {
       );
     }
 
+    const savings = await this.fineract.getSavingsBalance(clientId);
+
     const { maxLoanAmount, cappedAtMax } = this.calculateMaxLoanAmount(
       balance,
       loanMultiple,
+      savings ?? 0,
     );
     const isEligible = maxLoanAmount >= this.minEligibleLoan;
     const checkedAt = new Date();
@@ -321,6 +352,7 @@ export class MultiplierService {
         maxLoanAmount,
         isEligible,
         checkedAt,
+        savings,
       ),
     });
 
@@ -329,6 +361,7 @@ export class MultiplierService {
       multiplier,
       loanMultiple,
       contributionBalance: balance,
+      savingsBalance: savings ?? 0,
       maxLoanAmount,
       cappedAtMax,
       isEligible,
@@ -399,13 +432,19 @@ export class MultiplierService {
       this.isCacheFresh(director.eligibilityCheckedAt)
     ) {
       const balance = Number(director.contributionBalance);
+      const savings = Number(director.savingsBalance ?? 0);
       const maxLoan = Number(director.maxLoanAmount);
-      const { cappedAtMax } = this.calculateMaxLoanAmount(balance, loanMultiple);
+      const { cappedAtMax } = this.calculateMaxLoanAmount(
+        balance,
+        loanMultiple,
+        savings,
+      );
       return {
         clientId,
         multiplier,
         loanMultiple,
         contributionBalance: balance,
+        savingsBalance: savings,
         maxLoanAmount: maxLoan,
         cappedAtMax,
         isEligible: director.isEligible ?? false,
@@ -437,9 +476,12 @@ export class MultiplierService {
       );
     }
 
+    const savings = await this.fineract.getSavingsBalance(clientId);
+
     const { maxLoanAmount, cappedAtMax } = this.calculateMaxLoanAmount(
       contributionBalance,
       loanMultiple,
+      savings ?? 0,
     );
     const isEligible = maxLoanAmount >= this.minEligibleLoan;
     const checkedAt = new Date();
@@ -451,6 +493,7 @@ export class MultiplierService {
         maxLoanAmount,
         isEligible,
         checkedAt,
+        savings,
       ),
     });
 
@@ -459,6 +502,7 @@ export class MultiplierService {
       multiplier,
       loanMultiple,
       contributionBalance,
+      savingsBalance: savings ?? 0,
       maxLoanAmount,
       cappedAtMax,
       isEligible,

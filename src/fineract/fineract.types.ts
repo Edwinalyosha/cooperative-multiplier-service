@@ -15,6 +15,13 @@ export interface FineractSavingsAccountSummary {
   accountNo?: string;
   accountBalance?: number;
   availableBalance?: number;
+  /**
+   * Distinguishes the contributions (ownership stake) account from ordinary
+   * savings. Fineract has always returned it on /clients/{id}/accounts; we
+   * only began reading it when the two were separated on 2026-08-29.
+   */
+  productId?: number;
+  productName?: string;
 }
 
 export interface FineractClientAccountsResponse {

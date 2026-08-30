@@ -1,0 +1,16 @@
+-- Separate a member's ordinary savings from their contributions (ownership
+-- stake), so the two can be rewarded differently:
+--
+--   maxLoanAmount = contributionBalance * loanMultiple + savingsBalance * savingsFactor
+--
+-- Contributions are committed capital: leveraged 1-5x, they alone move the
+-- multiplier, and they are the basis for any later profit split. Savings are
+-- voluntary and withdrawable, so they add capacity at face value only.
+--
+-- Nullable with no default and no backfill, deliberately. NULL means "never
+-- yet read from Fineract" and is treated as 0 in the limit calculation, so
+-- existing rows keep exactly the limit they have until their next eligibility
+-- refresh. Defaulting to 0 would look identical but would erase the
+-- distinction between "no savings" and "not yet checked" — and a backfill
+-- would be inventing balances the cooperative never recorded.
+ALTER TABLE "DirectorMultiplier" ADD COLUMN "savingsBalance" DECIMAL(14,2);

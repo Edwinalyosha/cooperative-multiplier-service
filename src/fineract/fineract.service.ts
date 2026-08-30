@@ -14,6 +14,7 @@ import {
   FineractClientListResponse,
   FineractClientAccountsResponse,
   FineractSavingsAccountDetail,
+  FineractSavingsAccountSummary,
   FineractLoanProductDetail,
   CreateFineractLoanParams,
   CreateFineractLoanResponse,
@@ -261,9 +262,18 @@ export class FineractService {
     const accounts = await this.getClientAccounts(clientId);
     if (!accounts?.savingsAccounts?.length) return [];
 
+    // Contributions only. A deposit into ordinary savings is not the weekly
+    // obligation, and counting it would let a member satisfy the contribution
+    // requirement — and earn the multiplier improvement — with money they can
+    // withdraw the next day.
+    const contributionAccounts = this.accountsForProduct(
+      accounts.savingsAccounts,
+      this.contributionsProductId,
+    );
+
     const deposits: { date: string; amount: number }[] = [];
 
-    for (const account of accounts.savingsAccounts) {
+    for (const account of contributionAccounts) {
       if (!account.id) continue;
       try {
         const detail = await this.get<FineractSavingsWithTransactions>(
@@ -303,7 +313,47 @@ export class FineractService {
   }
 
   /**
-   * Sum of all active savings (contribution) balances for a Fineract client.
+   * Selects the savings accounts belonging to one product.
+   *
+   * When no product id is configured this returns every account, preserving
+   * the pre-2026-08-29 behaviour in which all savings were contributions.
+   * That is the safe degradation: a missing or mistyped product id falls back
+   * to the old single-pot model rather than reporting every member as having
+   * contributed nothing, which would zero their borrowing limits.
+   */
+  private accountsForProduct(
+    accounts: FineractSavingsAccountSummary[],
+    productId: number | undefined,
+  ): FineractSavingsAccountSummary[] {
+    if (productId == null) return accounts;
+    return accounts.filter((account) => account.productId === productId);
+  }
+
+  /** Sums balances, falling back to a per-account fetch where the list
+   * response omits one. */
+  private async sumBalances(
+    accounts: FineractSavingsAccountSummary[],
+  ): Promise<number> {
+    let total = 0;
+    for (const account of accounts) {
+      const inline = account.accountBalance ?? account.availableBalance;
+      if (inline != null) {
+        total += Number(inline);
+        continue;
+      }
+      if (account.id) {
+        total += await this.getSavingsAccountBalance(account.id);
+      }
+    }
+    return total;
+  }
+
+  /**
+   * The member's CONTRIBUTIONS balance — their ownership stake, built from the
+   * weekly obligation. This is what the multiplier leverages 1-5x into a
+   * borrowing limit and what any later profit split is apportioned by.
+   *
+   * Not the same as their savings: see getSavingsBalance.
    */
   async getContributionBalance(clientId: number): Promise<number | null> {
     if (!this.isConfigured()) {
@@ -319,20 +369,40 @@ export class FineractService {
       return 0;
     }
 
-    let total = 0;
-    for (const account of accounts.savingsAccounts) {
-      const inline =
-        account.accountBalance ?? account.availableBalance;
-      if (inline != null) {
-        total += Number(inline);
-        continue;
-      }
-      if (account.id) {
-        total += await this.getSavingsAccountBalance(account.id);
-      }
-    }
+    return this.sumBalances(
+      this.accountsForProduct(
+        accounts.savingsAccounts,
+        this.contributionsProductId,
+      ),
+    );
+  }
 
-    return total;
+  /**
+   * The member's ordinary SAVINGS balance — voluntary, liquid, conferring no
+   * ownership. Adds to the borrowing limit at face value.
+   *
+   * Returns 0 when no savings product is configured, because in that world
+   * every account is a contribution and counting it here as well would let
+   * the same shilling raise a member's limit twice.
+   */
+  async getSavingsBalance(clientId: number): Promise<number | null> {
+    if (!this.isConfigured()) return null;
+    if (this.savingsProductId == null) return 0;
+
+    const accounts = await this.getClientAccounts(clientId);
+    if (!accounts?.savingsAccounts?.length) return 0;
+
+    return this.sumBalances(
+      this.accountsForProduct(accounts.savingsAccounts, this.savingsProductId),
+    );
+  }
+
+  private get contributionsProductId(): number | undefined {
+    return this.config.get<number>('fineract.contributionsProductId');
+  }
+
+  private get savingsProductId(): number | undefined {
+    return this.config.get<number>('fineract.savingsProductId');
   }
 
   async getActiveLoanIds(clientId: number): Promise<number[]> {

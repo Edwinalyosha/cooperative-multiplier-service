@@ -1,3 +1,10 @@
+/** Parses an optional integer env var; undefined when unset or unparseable. */
+function optionalInt(value: string | undefined): number | undefined {
+  if (value === undefined || value.trim() === '') return undefined;
+  const parsed = Number.parseInt(value, 10);
+  return Number.isFinite(parsed) ? parsed : undefined;
+}
+
 /** Parses an optional float env var; undefined when unset or unparseable. */
 function optionalFloat(value: string | undefined): number | undefined {
   if (value === undefined || value.trim() === '') return undefined;
@@ -12,6 +19,26 @@ export default () => ({
     tenantId: process.env.FINERACT_TENANT_ID ?? 'default',
     username: process.env.FINERACT_USERNAME,
     password: process.env.FINERACT_PASSWORD,
+    /**
+     * Savings products that separate the two kinds of member money.
+     *
+     * CONTRIBUTIONS is the weekly obligation — the ownership stake. It earns
+     * the multiplier, is leveraged 1-5x into the borrowing limit, and is the
+     * basis for any later profit split.
+     *
+     * SAVINGS is voluntary and liquid. It adds to the borrowing limit at face
+     * value and confers no ownership.
+     *
+     * Both UNSET means the pre-2026-08-29 behaviour: every savings account is
+     * treated as a contribution and savings are zero. That keeps this
+     * deployable before the Fineract products exist, and means a
+     * misconfiguration degrades to the old model rather than zeroing
+     * everybody's limit.
+     */
+    contributionsProductId: optionalInt(
+      process.env.FINERACT_CONTRIBUTIONS_PRODUCT_ID,
+    ),
+    savingsProductId: optionalInt(process.env.FINERACT_SAVINGS_PRODUCT_ID),
   },
   redis: {
     host: process.env.REDIS_HOST ?? 'localhost',
@@ -57,6 +84,22 @@ export default () => ({
       process.env.WEEKLY_CONTRIBUTION_MINIMUM ?? '20000',
       10,
     ),
+    /**
+     * How much each shilling of ordinary savings adds to a member's borrowing
+     * limit: `limit = contributions x loanMultiple + savings x savingsFactor`.
+     *
+     * 1.0 by default — savings count at face value. Contributions are
+     * leveraged 1-5x because they are committed capital that also earns the
+     * multiplier; savings are withdrawable, so lending more against them than
+     * they are worth would let a member borrow and then remove the backing.
+     * Below 1.0 would penalise money the member has actually placed with the
+     * cooperative.
+     *
+     * Savings deliberately do NOT move the multiplier. Contributions buy a
+     * better RATE; savings buy CAPACITY only. A member with no savings account
+     * is not disadvantaged — contributions alone carry the full 1-5x.
+     */
+    savingsFactor: optionalFloat(process.env.SAVINGS_FACTOR) ?? 1.0,
     steps: {
       ON_TIME_CONTRIBUTION: optionalFloat(process.env.STEP_ON_TIME_CONTRIBUTION),
       CONSECUTIVE_ON_TIME_CONTRIBUTIONS: optionalFloat(
