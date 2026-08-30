@@ -75,6 +75,27 @@ export class LoansController {
     );
   }
 
+  /**
+   * MUST stay above `applications/:id` — Nest matches in declaration order,
+   * and a literal path declared after a parameterised one is unreachable
+   * ("stuck-disbursement" would be parsed as an id).
+   */
+  @Get('applications/stuck-disbursement')
+  @UseGuards(MobileJwtGuard, RolesGuard)
+  @Roles(UserRole.FINANCE_MANAGER)
+  @ApiBearerAuth()
+  @ApiOperation({
+    summary:
+      'Applications Fineract has APPROVED but which never disbursed. No ' +
+      'money has moved and the member is waiting. These do NOT appear in ' +
+      'pending-my-decision, which lists only applications awaiting a first ' +
+      'decision — so without this they are invisible, and a borrower waits ' +
+      'indefinitely for funds nobody knows are stuck.',
+  })
+  listStuckDisbursements() {
+    return this.loansService.listStuckDisbursements();
+  }
+
   @Get('applications/:id')
   @UseGuards(MobileJwtGuard, RolesGuard)
   @Roles(UserRole.DIRECTOR, UserRole.FINANCE_MANAGER)

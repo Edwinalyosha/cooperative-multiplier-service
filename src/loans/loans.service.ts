@@ -902,6 +902,28 @@ export class LoansService {
    *                    manager has no prior-vote concept to exclude).
    * Ordered oldest-first so the most urgent application appears at the top.
    */
+  /**
+   * Loans Fineract approved but which never disbursed.
+   *
+   * Deliberately a separate list from listPendingMyDecision. That one answers
+   * "what needs a decision"; these have already been decided — the finance
+   * manager approved them and the disbursement call failed afterwards. No
+   * money has moved and the member is waiting, which makes them the most
+   * urgent thing in the system and the least visible: they sit in no queue,
+   * and only the Phase 4 status field records that anything is wrong.
+   *
+   * Oldest first — the wait is the whole problem.
+   */
+  async listStuckDisbursements() {
+    return this.prisma.loanApplication.findMany({
+      where: {
+        status: LoanApplicationStatus.APPROVED_PENDING_DISBURSEMENT,
+      },
+      include: { approvals: true },
+      orderBy: { financeDecidedAt: 'asc' },
+    });
+  }
+
   async listPendingMyDecision(
     role: string,
     clientId: number | null,
