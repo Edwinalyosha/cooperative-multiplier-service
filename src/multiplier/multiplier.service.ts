@@ -147,6 +147,43 @@ export class MultiplierService {
   }
 
   /**
+   * How much of a member's savings a given loan actually leans on, and so how
+   * much must be frozen as collateral.
+   *
+   * Only the part of the request that exceeds what contributions alone can
+   * support is pledged. A member borrowing well within their
+   * contributions-derived limit has nothing frozen — freezing savings that
+   * are not backing anything would be a penalty for having saved.
+   *
+   * Divided by savingsFactor because the factor is a bonus on the pledge, not
+   * on the collateral: at 1.2, every 100 of frozen savings unlocks 120 of
+   * borrowing, so covering a 120 shortfall requires pledging 100.
+   *
+   * Capped at the actual savings balance. Anything the cap leaves uncovered
+   * is the deliberate unsecured margin the factor creates, and it sits behind
+   * the guarantor's obligation to cover the whole principal.
+   */
+  calculateSavingsPledge(params: {
+    requestedAmount: number;
+    contributionBalance: number;
+    loanMultiple: number;
+    savingsBalance: number;
+  }): number {
+    const contributionsCapacity =
+      params.contributionBalance * params.loanMultiple;
+    const shortfall = params.requestedAmount - contributionsCapacity;
+    if (shortfall <= 0) return 0;
+
+    const factor = this.savingsFactor;
+    const needed = factor > 0 ? shortfall / factor : shortfall;
+
+    return Math.min(
+      Math.ceil(Math.max(0, needed)),
+      Math.floor(params.savingsBalance),
+    );
+  }
+
+  /**
    * A member's ownership share of the cooperative: their contributions as a
    * percentage of everyone's.
    *

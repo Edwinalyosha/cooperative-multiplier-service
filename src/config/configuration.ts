@@ -39,6 +39,19 @@ export default () => ({
       process.env.FINERACT_CONTRIBUTIONS_PRODUCT_ID,
     ),
     savingsProductId: optionalInt(process.env.FINERACT_SAVINGS_PRODUCT_ID),
+    /**
+     * Code value from Fineract's SavingsTransactionFreezeReasons code (id 38
+     * on this instance), stamped on every collateral hold so the freeze has a
+     * recorded reason rather than appearing unexplained on a member's
+     * statement.
+     *
+     * Instance-specific, hence config and not a constant: rebuilding the
+     * tenant would renumber it. Unset means no hold can be placed, which in
+     * turn means no loan may rely on pledged savings.
+     */
+    savingsHoldReasonId: optionalInt(
+      process.env.FINERACT_SAVINGS_HOLD_REASON_ID,
+    ),
   },
   redis: {
     host: process.env.REDIS_HOST ?? 'localhost',

@@ -478,6 +478,103 @@ export class LoansService {
   }
 
   /**
+   * Freezes the savings this loan actually leans on.
+   *
+   * Only the amount above what contributions alone could support is pledged,
+   * so a member borrowing within their contributions-derived limit has
+   * nothing frozen. No pledge needed, or no savings account, means no hold and
+   * no error — savings are voluntary and most loans will not touch them.
+   *
+   * Records the transaction id, which is Fineract's only handle on the hold.
+   * Written immediately after the call returns: losing it would leave a
+   * member's money frozen with no route back except manual surgery.
+   */
+  private async placeSavingsHold(
+    applicationId: number,
+    clientId: number,
+    params: { requestedAmount: number },
+  ): Promise<void> {
+    const eligibility = await this.multiplierService.getEligibility(clientId);
+
+    const pledge = this.multiplierService.calculateSavingsPledge({
+      requestedAmount: params.requestedAmount,
+      contributionBalance: eligibility.contributionBalance,
+      loanMultiple: eligibility.loanMultiple,
+      savingsBalance: eligibility.savingsBalance,
+    });
+
+    if (pledge <= 0) return;
+
+    const savingsAccountId = await this.fineract.getSavingsAccountId(clientId);
+    if (savingsAccountId == null) {
+      // The limit that justified this amount counted savings, so a member
+      // with no savings account here means the two reads disagree. Refuse
+      // rather than lend the unsecured difference.
+      throw new Error(
+        `Client ${clientId} needs to pledge ${pledge} of savings but has no ` +
+          'savings account.',
+      );
+    }
+
+    const holdTransactionId = await this.fineract.holdSavingsAmount({
+      savingsAccountId,
+      amount: pledge,
+    });
+
+    await this.prisma.loanApplication.update({
+      where: { id: applicationId },
+      data: {
+        savingsHoldAccountId: savingsAccountId,
+        savingsHoldTransactionId: holdTransactionId,
+        savingsHeldAmount: pledge,
+      },
+    });
+
+    this.logger.log(
+      `Application ${applicationId}: froze ${pledge} of client ${clientId}'s ` +
+        `savings as collateral (hold transaction ${holdTransactionId}).`,
+    );
+  }
+
+  /**
+   * Releases a collateral hold once its loan is no longer outstanding.
+   *
+   * Separate from the disbursement path because a loan ends long after, and
+   * by an event this service never sees — a repayment made at a branch, say.
+   * The release sweep calls this; nothing else should.
+   */
+  async releaseSavingsHold(applicationId: number): Promise<boolean> {
+    const application = await this.prisma.loanApplication.findUnique({
+      where: { id: applicationId },
+    });
+
+    if (
+      !application?.savingsHoldTransactionId ||
+      !application.savingsHoldAccountId ||
+      application.savingsHoldReleasedAt
+    ) {
+      return false;
+    }
+
+    await this.fineract.releaseSavingsAmount({
+      savingsAccountId: application.savingsHoldAccountId,
+      holdTransactionId: application.savingsHoldTransactionId,
+    });
+
+    await this.prisma.loanApplication.update({
+      where: { id: applicationId },
+      data: { savingsHoldReleasedAt: new Date() },
+    });
+
+    this.logger.log(
+      `Application ${applicationId}: released the ${String(
+        application.savingsHeldAmount,
+      )} savings hold — the loan is no longer outstanding.`,
+    );
+    return true;
+  }
+
+  /**
    * Phase 4 — finance manager's final, unilateral decision. Only reachable
    * once the director quorum has already advanced the application to
    * PENDING_FINANCE_APPROVAL (finance never intervenes earlier). Approve
@@ -556,6 +653,40 @@ export class LoansService {
           `Application ${applicationId} was already approved in Fineract at ` +
             `${application.fineractApprovedAt.toISOString()} — resuming at disbursement.`,
         );
+      }
+
+      // Secure the collateral BEFORE the money moves. A savings-backed loan
+      // whose backing was never frozen is exactly the hole the hold exists to
+      // close, and once disbursed there is no way to insist after the fact.
+      // Placed after approve so a failure here lands in the same recoverable
+      // APPROVED_PENDING_DISBURSEMENT state as a failed disbursement.
+      if (!application.savingsHoldTransactionId) {
+        try {
+          await this.placeSavingsHold(applicationId, application.clientId, {
+            requestedAmount: Number(application.requestedAmount),
+          });
+        } catch (error) {
+          await this.prisma.loanApplication.update({
+            where: { id: applicationId },
+            data: {
+              status: LoanApplicationStatus.APPROVED_PENDING_DISBURSEMENT,
+              financeDecidedBy: financeUserId,
+              financeDecidedAt: new Date(),
+              financeNotes: dto.notes,
+            },
+          });
+          this.logger.error(
+            `Application ${applicationId}: could not freeze the pledged ` +
+              'savings, so nothing was disbursed. Marked ' +
+              'APPROVED_PENDING_DISBURSEMENT; a retry will try the hold ' +
+              `again. No money moved. ${redactFineractError(error)}`,
+          );
+          throw new BadRequestException(
+            'Could not secure the savings pledged against this loan, so it ' +
+              'was not disbursed. The approval is recorded; retry to ' +
+              'complete it.',
+          );
+        }
       }
 
       try {

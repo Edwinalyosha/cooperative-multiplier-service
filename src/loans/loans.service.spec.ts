@@ -65,8 +65,20 @@ describe('LoansService — finance decision (resumable disbursement)', () => {
       rejectLoan: jest.fn().mockResolvedValue(undefined),
     };
 
+    // A borrower whose contributions alone cover the loan, so nothing is
+    // pledged and no collateral hold is placed. These tests are about the
+    // approve/disburse pair; the pledge rule has its own suite.
+    const multiplier = {
+      getEligibility: jest.fn(async () => ({
+        contributionBalance: 1_000_000,
+        loanMultiple: 5,
+        savingsBalance: 0,
+      })),
+      calculateSavingsPledge: jest.fn(() => 0),
+    } as unknown as MultiplierService;
+
     service = new LoansService(
-      {} as MultiplierService,
+      multiplier,
       {} as MultiplierQueueService,
       fineract as unknown as FineractService,
       prisma,

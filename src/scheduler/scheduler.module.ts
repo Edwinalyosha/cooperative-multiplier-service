@@ -3,6 +3,7 @@ import { ScheduleModule } from '@nestjs/schedule';
 import { EligibilityScheduler } from './eligibility.scheduler';
 import { LoanExpiryScheduler } from './loan-expiry.scheduler';
 import { ContributionSweepScheduler } from './contribution-sweep.scheduler';
+import { SavingsHoldReleaseScheduler } from './savings-hold-release.scheduler';
 import { MultiplierModule } from '../multiplier/multiplier.module';
 import { QueueModule } from '../queue/queue.module';
 import { PrismaModule } from '../prisma/prisma.module';
@@ -42,6 +43,7 @@ import { ContributionsModule } from '../contributions/contributions.module';
     EligibilityScheduler,
     LoanExpiryScheduler,
     ContributionSweepScheduler,
+    SavingsHoldReleaseScheduler,
   ],
 })
 export class SchedulerModule {}

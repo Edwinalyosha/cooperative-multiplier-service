@@ -397,6 +397,75 @@ export class FineractService {
     );
   }
 
+  /**
+   * The id of the member's ordinary savings account — the one a collateral
+   * hold is placed on. Null when they have none, which is normal: savings are
+   * voluntary.
+   */
+  async getSavingsAccountId(clientId: number): Promise<number | null> {
+    if (!this.isConfigured() || this.savingsProductId == null) return null;
+
+    const accounts = await this.getClientAccounts(clientId);
+    if (!accounts?.savingsAccounts?.length) return null;
+
+    const match = this.accountsForProduct(
+      accounts.savingsAccounts,
+      this.savingsProductId,
+    );
+    return match[0]?.id ?? null;
+  }
+
+  /**
+   * Freezes part of a member's savings as collateral for a loan.
+   *
+   * Verified against this instance on 2026-08-30: the command takes
+   * `transactionAmount` (NOT `amount`, which is rejected as unsupported) and
+   * a `reasonForBlock` drawn from the SavingsTransactionFreezeReasons code.
+   * Returns the hold transaction id, which is the handle releaseSavingsAmount
+   * needs later — so it must be persisted, not recomputed.
+   */
+  async holdSavingsAmount(params: {
+    savingsAccountId: number;
+    amount: number;
+    transactionDate?: Date;
+  }): Promise<number> {
+    const reasonId = this.config.get<number>('fineract.savingsHoldReasonId');
+    if (reasonId == null) {
+      throw new Error(
+        'FINERACT_SAVINGS_HOLD_REASON_ID is not configured; refusing to place ' +
+          'a savings hold without a recorded reason.',
+      );
+    }
+
+    const response = await this.post<{ resourceId: number }>(
+      `/savingsaccounts/${params.savingsAccountId}/transactions?command=holdAmount`,
+      {
+        transactionAmount: params.amount,
+        reasonForBlock: reasonId,
+        transactionDate: FineractService.formatFineractDate(
+          params.transactionDate ?? new Date(),
+        ),
+        locale: 'en',
+        dateFormat: 'dd MMMM yyyy',
+      },
+    );
+
+    return response.resourceId;
+  }
+
+  /** Lifts a hold placed by holdSavingsAmount, returning the money to the
+   * member's available balance. */
+  async releaseSavingsAmount(params: {
+    savingsAccountId: number;
+    holdTransactionId: number;
+  }): Promise<void> {
+    await this.post(
+      `/savingsaccounts/${params.savingsAccountId}/transactions/` +
+        `${params.holdTransactionId}?command=releaseAmount`,
+      {},
+    );
+  }
+
   private get contributionsProductId(): number | undefined {
     return this.config.get<number>('fineract.contributionsProductId');
   }

@@ -113,6 +113,19 @@ model LoanApplication {
   /// resumable — see LoansService.financeDecision.
   fineractApprovedAt         DateTime?
 
+  /// Collateral hold placed on the borrower's SAVINGS account at
+  /// disbursement, for the portion of the limit that came from savings rather
+  /// than contributions. Without it, a member could save, borrow against the
+  /// raised limit, and withdraw the backing — which is what makes a
+  /// savingsFactor above 1.0 safe.
+  ///
+  /// The transaction id is Fineract's handle for the hold and the only way to
+  /// release it, so it is stored rather than recomputed.
+  savingsHoldAccountId       Int?
+  savingsHoldTransactionId   Int?
+  savingsHeldAmount          Decimal?  @db.Decimal(14, 2)
+  savingsHoldReleasedAt      DateTime?
+
   approvals                  LoanApproval[]
 }
 
