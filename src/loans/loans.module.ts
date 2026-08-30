@@ -1,5 +1,6 @@
 import { Module } from '@nestjs/common';
 import { LoansService } from './loans.service';
+import { RepaymentAssessmentService } from './repayment-assessment.service';
 import { LoansController } from './loans.controller';
 import { MultiplierModule } from '../multiplier/multiplier.module';
 import { QueueModule } from '../queue/queue.module';
@@ -15,8 +16,8 @@ import { MobileAuthModule } from '../mobile-auth/mobile-auth.module';
     PrismaModule,
     MobileAuthModule,
   ],
-  providers: [LoansService],
+  providers: [LoansService, RepaymentAssessmentService],
   controllers: [LoansController],
-  exports: [LoansService],
+  exports: [LoansService, RepaymentAssessmentService],
 })
 export class LoansModule {}

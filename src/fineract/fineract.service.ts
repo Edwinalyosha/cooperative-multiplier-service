@@ -15,6 +15,7 @@ import {
   FineractClientAccountsResponse,
   FineractSavingsAccountDetail,
   FineractSavingsAccountSummary,
+  FineractLoanWithSchedule,
   FineractLoanProductDetail,
   CreateFineractLoanParams,
   CreateFineractLoanResponse,
@@ -395,6 +396,81 @@ export class FineractService {
     return this.sumBalances(
       this.accountsForProduct(accounts.savingsAccounts, this.savingsProductId),
     );
+  }
+
+  /**
+   * A loan's installments, with when each was due and when it was met.
+   *
+   * This is why repayment timeliness is READ rather than inferred from
+   * payment size: Fineract already holds the schedule. A threshold on
+   * transaction amount would call a part-payment three weeks late "on time",
+   * and would have no idea an installment was missed entirely.
+   *
+   * Period 0 is the disbursement row and carries no obligation, so it is
+   * dropped here rather than at every call site.
+   */
+  async getRepaymentSchedule(loanId: number): Promise<
+    {
+      installment: number;
+      dueDate: string;
+      metOn: string | null;
+      complete: boolean;
+      outstanding: number;
+    }[]
+  > {
+    const loan = await this.get<FineractLoanWithSchedule>(
+      `/loans/${loanId}?associations=repaymentSchedule`,
+    );
+
+    return (loan.repaymentSchedule?.periods ?? [])
+      .filter((period) => (period.period ?? 0) > 0)
+      .map((period) => ({
+        installment: period.period ?? 0,
+        dueDate: FineractService.parseFineractDate(period.dueDate) ?? '',
+        metOn: FineractService.parseFineractDate(period.obligationsMetOnDate),
+        complete: period.complete === true,
+        outstanding: Number(period.totalOutstandingForPeriod ?? 0),
+      }))
+      .filter((period) => period.dueDate !== '');
+  }
+
+  /**
+   * Every contribution a member has paid, newest first.
+   *
+   * A member could see what they OWED but never what they had PAID — the
+   * first question anyone asks, and answering it meant a finance manager
+   * opening mifos-web.
+   *
+   * Reversed transactions are excluded. Fineract keeps them in the list, and
+   * showing one would tell a member they paid money that was taken back —
+   * which is exactly what happened to the phantom 500,000 openings.
+   */
+  async getContributionPayments(
+    clientId: number,
+    limit = 50,
+  ): Promise<
+    { id: number; date: string; amount: number; paymentType: string | null }[]
+  > {
+    if (!this.isConfigured()) return [];
+
+    const accountId = await this.getContributionsAccountId(clientId);
+    if (accountId == null) return [];
+
+    const detail = await this.get<FineractSavingsWithTransactions>(
+      `/savingsaccounts/${accountId}?associations=transactions`,
+    );
+
+    return (detail.transactions ?? [])
+      .filter((tx) => tx.transactionType?.deposit && !tx.reversed)
+      .map((tx) => ({
+        id: tx.id ?? 0,
+        date: FineractService.parseFineractDate(tx.date) ?? '',
+        amount: Number(tx.amount) || 0,
+        paymentType: tx.paymentDetailData?.paymentType?.name ?? null,
+      }))
+      .filter((tx) => tx.date !== '')
+      .sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : b.id - a.id))
+      .slice(0, limit);
   }
 
   /**

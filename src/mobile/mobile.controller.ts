@@ -52,6 +52,17 @@ export class MobileController {
     return this.mobileService.getThisWeek(clientId);
   }
 
+  @Get('contributions/:clientId/payments')
+  @ApiOperation({
+    summary:
+      'Every contribution the member has paid, newest first. Reversed ' +
+      'transactions are excluded — showing one would tell a member they paid ' +
+      'money that was taken back.',
+  })
+  payments(@Param('clientId', ParseIntPipe) clientId: number) {
+    return this.mobileService.getPayments(clientId);
+  }
+
   @Get('contributions/:clientId/arrears')
   @ApiOperation({
     summary:

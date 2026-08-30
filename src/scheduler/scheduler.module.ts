@@ -4,6 +4,8 @@ import { EligibilityScheduler } from './eligibility.scheduler';
 import { LoanExpiryScheduler } from './loan-expiry.scheduler';
 import { ContributionSweepScheduler } from './contribution-sweep.scheduler';
 import { SavingsHoldReleaseScheduler } from './savings-hold-release.scheduler';
+// RepaymentAssessmentService comes from LoansModule, already imported below.
+import { RepaymentSweepScheduler } from './repayment-sweep.scheduler';
 import { MultiplierModule } from '../multiplier/multiplier.module';
 import { QueueModule } from '../queue/queue.module';
 import { PrismaModule } from '../prisma/prisma.module';
@@ -50,6 +52,7 @@ import { FineractModule } from '../fineract/fineract.module';
     LoanExpiryScheduler,
     ContributionSweepScheduler,
     SavingsHoldReleaseScheduler,
+    RepaymentSweepScheduler,
   ],
 })
 export class SchedulerModule {}

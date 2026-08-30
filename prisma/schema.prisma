@@ -95,6 +95,36 @@ model ContributionPeriod {
   @@index([clientId, status])
 }
 
+/// One loan installment, and whether it was met on time.
+///
+/// The same shape as ContributionPeriod, for the same reason: "assess each
+/// obligation exactly once" has to be a property of the data, not of how
+/// often a scheduler happens to run. The unique constraint plus assessedAt
+/// make a re-run, a restart or an overlapping cron harmless.
+///
+/// Timeliness is READ from Fineract's schedule, never inferred from payment
+/// size. A 12,000 payment three weeks late would pass any amount threshold
+/// while plainly being late, and no threshold can notice an installment that
+/// was missed entirely.
+model RepaymentAssessment {
+  id                Int      @id @default(autoincrement())
+  clientId          Int
+  fineractLoanId    Int
+  installmentNumber Int
+
+  dueDate           DateTime @db.Date
+  /// When the installment was fully paid. Null means it was overdue and
+  /// unpaid at the moment it was assessed.
+  metOn             DateTime? @db.Date
+  /// ON_TIME | LATE
+  outcome           String
+
+  assessedAt        DateTime @default(now())
+
+  @@unique([fineractLoanId, installmentNumber])
+  @@index([clientId])
+}
+
 model MultiplierHistory {
   id              Int      @id @default(autoincrement())
 

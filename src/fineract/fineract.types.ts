@@ -138,6 +138,31 @@ export interface WithdrawFineractLoanParams {
 }
 
 /** Savings account fetched with `?associations=transactions`. */
+/**
+ * A loan's repayment schedule as Fineract holds it.
+ *
+ * The reason repayment timeliness is read rather than inferred: Fineract
+ * already knows when each installment was DUE and when its obligations were
+ * MET. A transaction-size threshold would call a 12,000 payment three weeks
+ * late "on time", which is plainly wrong.
+ */
+export interface FineractLoanWithSchedule {
+  id?: number;
+  status?: { id?: number; active?: boolean; closedObligationsMet?: boolean };
+  repaymentSchedule?: {
+    periods?: {
+      /** 0 is the disbursement row, which has no obligation. */
+      period?: number;
+      dueDate?: unknown;
+      /** Present once the installment is fully paid. */
+      obligationsMetOnDate?: unknown;
+      complete?: boolean;
+      totalDueForPeriod?: number;
+      totalOutstandingForPeriod?: number;
+    }[];
+  };
+}
+
 export interface FineractSavingsWithTransactions {
   id?: number;
   transactions?: {
@@ -146,5 +171,12 @@ export interface FineractSavingsWithTransactions {
     date?: unknown;
     amount?: number;
     transactionType?: { deposit?: boolean; withdrawal?: boolean };
+    /** Reversed transactions stay in the list with this set. They must be
+     * excluded from any total or a member sees money that was taken back. */
+    reversed?: boolean;
+    /** How the money arrived — cash, mobile money. Shown in the member's
+     * payment history so a deposit can be matched to a real handover. */
+    paymentDetailData?: { paymentType?: { id?: number; name?: string } };
+    runningBalance?: number;
   }[];
 }

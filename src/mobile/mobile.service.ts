@@ -106,6 +106,17 @@ export class MobileService {
     return this.ledger.listArrears(clientId);
   }
 
+  /**
+   * Every contribution the member has paid, newest first — "what I paid".
+   *
+   * Returns an empty list rather than throwing when Fineract is unreadable,
+   * so the page renders. The UI distinguishes "no payments yet" from "could
+   * not load" by whether the request itself failed.
+   */
+  getPayments(clientId: number) {
+    return this.fineractService.getContributionPayments(clientId);
+  }
+
   getOwnershipShare(clientId: number) {
     return this.multiplierService.getOwnershipShare(clientId);
   }
