@@ -41,6 +41,60 @@ model DirectorMultiplier {
   history                            MultiplierHistory[]
 }
 
+/// One week's contribution obligation for one member.
+///
+/// The cooperative's model: every week a director owes a set amount. Miss it
+/// and the obligation is DEFERRED, not forgiven — it stays owed, interest
+/// free, until paid. A payment covers the current week first, then backfills
+/// the oldest unpaid week.
+///
+/// Why a table rather than deriving this from transactions each time:
+///
+///  - **"Penalised once" becomes a fact, not a hope.** The penalty fires only
+///    where penaltyAppliedAt IS NULL and stamps it in the same write. A
+///    re-run, a restart, a late sweep or a manual contribution record are all
+///    harmless. The previous design asked "has any multiplier event been
+///    recorded since this period closed?", which is a proxy for the real
+///    question and fails the moment anything else writes an event — the same
+///    mistake that made StreakScheduler compound (see MLTD-P008).
+///
+///  - **amountDue is SNAPSHOTTED.** The weekly amount changes from time to
+///    time; without storing it, raising 20,000 to 25,000 would retroactively
+///    make everyone delinquent for weeks they had paid in full.
+model ContributionPeriod {
+  id                     Int      @id @default(autoincrement())
+  clientId               Int
+
+  /// Monday and Sunday of the week, in Africa/Kampala. Stored as dates
+  /// because Fineract records transaction dates without a time component.
+  periodStart            DateTime @db.Date
+  periodEnd              DateTime @db.Date
+
+  /// What was owed for THIS week, fixed when the period was created.
+  amountDue              Decimal  @db.Decimal(14, 2)
+  /// Allocated from the member's contribution-account deposits. A partial
+  /// payment counts: the week is still late, but the money reduces the debt.
+  amountPaid             Decimal  @db.Decimal(14, 2) @default(0)
+
+  /// OPEN (not yet assessed) | SATISFIED | ARREARS
+  status                 String   @default("OPEN")
+
+  /// Set exactly once, the first time this week is found short. The unique
+  /// constraint below plus this field are what guarantee one penalty per
+  /// missed week.
+  penaltyAppliedAt       DateTime?
+  /// Set exactly once, when a week that WAS in arrears is fully paid.
+  arrearsRewardAppliedAt DateTime?
+  satisfiedAt            DateTime?
+
+  createdAt              DateTime @default(now())
+  updatedAt              DateTime @updatedAt
+
+  @@unique([clientId, periodStart])
+  /// The arrears query: what does this member still owe, oldest first.
+  @@index([clientId, status])
+}
+
 model MultiplierHistory {
   id              Int      @id @default(autoincrement())
 

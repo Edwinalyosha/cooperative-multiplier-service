@@ -1,16 +1,21 @@
 import { ConfigService } from '@nestjs/config';
 import { ContributionSweepService } from './contribution-sweep.service';
+import { ContributionLedgerService } from './contribution-ledger.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { FineractService } from '../fineract/fineract.service';
-import { MultiplierService } from '../multiplier/multiplier.service';
-import { MultiplierEventType } from '../multiplier/multiplier-event.enum';
 
 /**
- * The sweep decides, once a week, whether each member met their obligation.
- * Getting it wrong moves a real interest rate, so the cases that matter most
- * are the ones where a wrong answer costs someone money: a member penalised
- * twice, a member penalised for a week before they joined, and — the worst —
- * a member penalised because Fineract was briefly unreachable.
+ * What the SWEEP is responsible for, now that the ledger owns the verdict.
+ *
+ * The sweep decides WHO to assess and hands the ledger a number. Whether that
+ * number satisfies the week, whether a penalty is charged, and whether it is
+ * charged twice are the ledger's business and are tested in
+ * contribution-ledger.spec.ts.
+ *
+ * What is left here still matters, because each case is one where a wrong
+ * answer costs a member money: someone assessed for a week before they
+ * joined, and — the worst — someone marked late because Fineract was briefly
+ * unreachable.
  */
 describe('ContributionSweepService', () => {
   const MINIMUM = 20000;
@@ -18,21 +23,18 @@ describe('ContributionSweepService', () => {
   const MONDAY = new Date('2026-08-31T06:00:00Z');
 
   let deposits: { date: string; amount: number }[];
-  let historyRows: unknown[];
-  let processed: { clientId: number; eventType: MultiplierEventType }[];
   let depositsThrow: Error | null;
+  let assessed: { clientId: number; deposits: number; amountDue: number }[];
+  let assessment: { satisfied: boolean; penaltyCharged: boolean };
 
   function build(directors = [{ clientId: 2, createdAt: new Date('2026-01-01') }]) {
     deposits = [];
-    historyRows = [];
-    processed = [];
     depositsThrow = null;
+    assessed = [];
+    assessment = { satisfied: true, penaltyCharged: false };
 
     const prisma = {
       directorMultiplier: { findMany: jest.fn(async () => directors) },
-      multiplierHistory: {
-        findFirst: jest.fn(async () => historyRows[0] ?? null),
-      },
     } as unknown as PrismaService;
 
     const fineract = {
@@ -43,93 +45,105 @@ describe('ContributionSweepService', () => {
       }),
     } as unknown as FineractService;
 
-    const multiplier = {
-      processEvent: jest.fn(async (clientId: number, eventType: MultiplierEventType) => {
-        processed.push({ clientId, eventType });
-      }),
-    } as unknown as MultiplierService;
+    const ledger = {
+      assessPeriod: jest.fn(
+        async (
+          clientId: number,
+          _period: unknown,
+          amountDue: number,
+          total: number,
+        ) => {
+          assessed.push({ clientId, deposits: total, amountDue });
+          return {
+            clientId,
+            periodStart: '2026-08-24',
+            amountDue,
+            amountPaid: total,
+            satisfied: assessment.satisfied,
+            penaltyCharged: assessment.penaltyCharged,
+            arrearsCleared: [],
+            arrearsRemaining: 0,
+          };
+        },
+      ),
+    } as unknown as ContributionLedgerService;
 
     const config = {
       get: (key: string) =>
         key === 'multiplier.weeklyContributionMinimum' ? MINIMUM : undefined,
     } as unknown as ConfigService;
 
-    return new ContributionSweepService(prisma, fineract, multiplier, config);
+    return new ContributionSweepService(prisma, fineract, ledger, config);
   }
 
-  describe('meeting the minimum', () => {
-    it('marks a member on time when they deposit the full amount', async () => {
-      const service = build();
-      deposits = [{ date: '2026-08-26', amount: MINIMUM }];
-      const result = await service.sweep(MONDAY);
-      expect(result.onTime).toBe(1);
-      expect(processed[0].eventType).toBe(
-        MultiplierEventType.ON_TIME_CONTRIBUTION,
-      );
-    });
-
-    it('sums several deposits across the week', async () => {
+  describe('what it hands the ledger', () => {
+    it('sums every deposit in the week', async () => {
       const service = build();
       deposits = [
         { date: '2026-08-25', amount: 12000 },
         { date: '2026-08-28', amount: 8000 },
       ];
+      await service.sweep(MONDAY);
+      expect(assessed[0].deposits).toBe(20000);
+    });
+
+    it('passes the CURRENT weekly amount, for the ledger to snapshot', async () => {
+      // The amount changes over time and each week must keep the figure that
+      // applied when it closed — otherwise raising it turns paid weeks into
+      // arrears retroactively.
+      const service = build();
+      await service.sweep(MONDAY);
+      expect(assessed[0].amountDue).toBe(MINIMUM);
+    });
+
+    it('assesses a member who deposited nothing', async () => {
+      // The whole reason this is a scheduled sweep and not a webhook: money
+      // arriving can fire an event, but nothing fires when it does not, so
+      // non-participation would score better than late participation.
+      const service = build();
+      deposits = [];
+      await service.sweep(MONDAY);
+      expect(assessed).toHaveLength(1);
+      expect(assessed[0].deposits).toBe(0);
+    });
+  });
+
+  describe('counting the outcome', () => {
+    it('reports a satisfied week as on time', async () => {
+      const service = build();
+      assessment = { satisfied: true, penaltyCharged: false };
       const result = await service.sweep(MONDAY);
       expect(result.onTime).toBe(1);
     });
 
-    it('marks a PARTIAL payment late, not on time', async () => {
-      // Per the cooperative: a partial payment is not a met obligation.
-      // 5,000 against a 20,000 week is not a quarter of a contribution.
+    it('reports a newly penalised week as late', async () => {
       const service = build();
-      deposits = [{ date: '2026-08-26', amount: 5000 }];
+      assessment = { satisfied: false, penaltyCharged: true };
       const result = await service.sweep(MONDAY);
       expect(result.late).toBe(1);
-      expect(processed[0].eventType).toBe(
-        MultiplierEventType.LATE_CONTRIBUTION,
-      );
     });
 
-    it('marks a member with NO deposits late', async () => {
-      // The whole reason this is a scheduled sweep rather than a webhook:
-      // absence has to be noticed, or not contributing would score better
-      // than contributing late.
+    it('reports an already-penalised week as already processed, not late again', async () => {
+      // A re-run must not read as a second missed week. The ledger refuses to
+      // charge twice; the sweep must not report it as a fresh late either.
       const service = build();
-      deposits = [];
-      const result = await service.sweep(MONDAY);
-      expect(result.late).toBe(1);
-      expect(processed[0].eventType).toBe(
-        MultiplierEventType.LATE_CONTRIBUTION,
-      );
-    });
-  });
-
-  describe('idempotency', () => {
-    it('does not assess a member twice for the same period', async () => {
-      // A restart or a manual re-run must not move a multiplier by 0.04
-      // instead of 0.02, with nothing recording why.
-      const service = build();
-      historyRows = [{ id: 1 }]; // an event already recorded since the close
+      assessment = { satisfied: false, penaltyCharged: false };
       const result = await service.sweep(MONDAY);
       expect(result.skippedAlreadyProcessed).toBe(1);
-      expect(processed).toHaveLength(0);
+      expect(result.late).toBe(0);
     });
   });
 
   describe('members who joined mid-period', () => {
     it('skips someone created during the week just closed', async () => {
-      const service = build([
-        { clientId: 9, createdAt: new Date('2026-08-27') },
-      ]);
+      const service = build([{ clientId: 9, createdAt: new Date('2026-08-27') }]);
       const result = await service.sweep(MONDAY);
       expect(result.skippedTooNew).toBe(1);
-      expect(processed).toHaveLength(0);
+      expect(assessed).toHaveLength(0);
     });
 
     it('assesses someone who was present for the whole week', async () => {
-      const service = build([
-        { clientId: 9, createdAt: new Date('2026-08-24') },
-      ]);
+      const service = build([{ clientId: 9, createdAt: new Date('2026-08-24') }]);
       deposits = [{ date: '2026-08-26', amount: MINIMUM }];
       const result = await service.sweep(MONDAY);
       expect(result.onTime).toBe(1);
@@ -137,16 +151,16 @@ describe('ContributionSweepService', () => {
   });
 
   describe('when Fineract cannot be read', () => {
-    it('does NOT mark the member late', async () => {
-      // The most important test here. Silence from Fineract is not evidence
-      // a member failed to pay, and a wrongly-applied penalty changes the
-      // real interest rate on their next loan.
+    it('does NOT assess the member at all', async () => {
+      // The most important test here. Silence from Fineract is not evidence a
+      // member failed to pay, and a wrongly-applied penalty changes the real
+      // interest rate on their next loan.
       const service = build();
       depositsThrow = new Error('ECONNREFUSED');
       const result = await service.sweep(MONDAY);
       expect(result.failed).toBe(1);
       expect(result.late).toBe(0);
-      expect(processed).toHaveLength(0);
+      expect(assessed).toHaveLength(0);
     });
 
     it('carries on to the remaining members', async () => {
@@ -156,7 +170,6 @@ describe('ContributionSweepService', () => {
       ]);
       depositsThrow = new Error('ECONNREFUSED');
       const result = await service.sweep(MONDAY);
-      // One member's outage must not abandon the rest of the sweep.
       expect(result.failed).toBe(2);
     });
   });
@@ -165,12 +178,11 @@ describe('ContributionSweepService', () => {
     it('sweeps nobody rather than marking everyone late', async () => {
       const prisma = {
         directorMultiplier: { findMany: jest.fn() },
-        multiplierHistory: { findFirst: jest.fn() },
       } as unknown as PrismaService;
       const service = new ContributionSweepService(
         prisma,
         { isConfigured: () => false } as unknown as FineractService,
-        { processEvent: jest.fn() } as unknown as MultiplierService,
+        { assessPeriod: jest.fn() } as unknown as ContributionLedgerService,
         { get: () => MINIMUM } as unknown as ConfigService,
       );
 

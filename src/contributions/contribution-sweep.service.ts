@@ -2,8 +2,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { PrismaService } from '../prisma/prisma.service';
 import { FineractService } from '../fineract/fineract.service';
-import { MultiplierService } from '../multiplier/multiplier.service';
-import { MultiplierEventType } from '../multiplier/multiplier-event.enum';
+import { ContributionLedgerService } from './contribution-ledger.service';
 import {
   ContributionPeriod,
   lastCompletedWeek,
@@ -45,7 +44,7 @@ export class ContributionSweepService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly fineract: FineractService,
-    private readonly multiplierService: MultiplierService,
+    private readonly ledger: ContributionLedgerService,
     private readonly config: ConfigService,
   ) {}
 
@@ -115,10 +114,6 @@ export class ContributionSweepService {
       return 'skippedTooNew';
     }
 
-    if (await this.alreadyProcessed(director.clientId, period)) {
-      return 'skippedAlreadyProcessed';
-    }
-
     const deposits = await this.fineract.getDepositsBetween(
       director.clientId,
       period.startDate,
@@ -126,55 +121,54 @@ export class ContributionSweepService {
     );
     const total = deposits.reduce((sum, d) => sum + d.amount, 0);
 
-    // Partial payment is not a met obligation: below the minimum counts as
-    // late, per the cooperative's decision. Depositing 5,000 against a 20,000
-    // weekly is not three-quarters of a contribution.
-    const metMinimum = total >= this.minimumAmount;
-
-    await this.multiplierService.processEvent(
+    // The ledger owns the decision from here. It snapshots what was owed for
+    // this week, allocates the money (this week first, then the oldest unpaid
+    // week), and charges the penalty at most once — enforced by
+    // `penaltyAppliedAt: null` in the WHERE clause rather than by this sweep
+    // running exactly once.
+    //
+    // The old "has any event been recorded since the period closed?" check
+    // used to live here. It was a proxy for the real question and would skip
+    // a member entirely if anything else had written an event — including a
+    // finance manager recording a contribution by hand, which silently
+    // suppressed the sweep's own verdict.
+    const assessment = await this.ledger.assessPeriod(
       director.clientId,
-      metMinimum
-        ? MultiplierEventType.ON_TIME_CONTRIBUTION
-        : MultiplierEventType.LATE_CONTRIBUTION,
-      'contribution-sweep',
-      `Week ${period.startDate}..${period.endDate}: deposited ${total} ` +
-        `against a ${this.minimumAmount} minimum` +
-        (deposits.length === 0 ? ' (no deposits found)' : ''),
+      period,
+      this.minimumAmount,
+      total,
     );
 
-    return metMinimum ? 'onTime' : 'late';
-  }
+    if (assessment.arrearsCleared.length > 0) {
+      this.logger.log(
+        `Client ${director.clientId} cleared ${assessment.arrearsCleared.length} ` +
+          `missed week(s): ${assessment.arrearsCleared.join(', ')}.`,
+      );
+    }
 
-  /**
-   * Has this member already been assessed for this period?
-   *
-   * Running the sweep twice must not penalise anyone twice — a container
-   * restart, a manual re-run, or an overlapping cron would otherwise move a
-   * multiplier by 0.04 instead of 0.02 with nothing in the system explaining
-   * why.
-   *
-   * Derived from MultiplierHistory rather than a tracking table: any
-   * contribution event recorded SINCE the period closed can only belong to
-   * this period, because earlier periods were assessed before that instant.
-   * That reuses data we already write and cannot drift out of sync with it.
-   */
-  private async alreadyProcessed(
-    clientId: number,
-    period: ContributionPeriod,
-  ): Promise<boolean> {
-    const existing = await this.prisma.multiplierHistory.findFirst({
-      where: {
-        clientId,
-        eventType: {
-          in: [
-            MultiplierEventType.ON_TIME_CONTRIBUTION,
-            MultiplierEventType.LATE_CONTRIBUTION,
-          ],
-        },
-        createdAt: { gte: period.closedAt },
-      },
-      select: { id: true },
-    });
-    return existing !== null;
+    if (assessment.satisfied) return 'onTime';
+    // Not penalising again is not the same as not assessing: a re-run reports
+    // the week as already handled rather than as a fresh late.
+    return assessment.penaltyCharged ? 'late' : 'skippedAlreadyProcessed';
   }
 }
+
+/*
+ * REMOVED 2026-08-30: a private `alreadyProcessed()` that asked
+ * MultiplierHistory whether any contribution event existed since the period
+ * closed.
+ *
+ * It was a proxy for "has this WEEK been assessed", and it answered a
+ * different question — "has anything happened lately". Two consequences:
+ *
+ *   - A finance manager recording a contribution by hand made the sweep skip
+ *     that member entirely, silently suppressing the sweep's own verdict,
+ *     including a LATE one it would otherwise have found.
+ *   - It could only ever express "once per stretch of time", never "once per
+ *     obligation" — the same limitation that made StreakScheduler re-award a
+ *     bonus daily (MLTD-P008).
+ *
+ * ContributionPeriod.penaltyAppliedAt answers the real question, and the
+ * guarantee is enforced by the WHERE clause of the update that charges it
+ * rather than by this sweep running exactly once.
+ */

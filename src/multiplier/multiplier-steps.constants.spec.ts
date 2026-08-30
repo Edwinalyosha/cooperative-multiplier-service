@@ -29,6 +29,10 @@ const REWARDS = [
   MultiplierEventType.CONSECUTIVE_ON_TIME_CONTRIBUTIONS,
   MultiplierEventType.ON_TIME_REPAYMENT,
   MultiplierEventType.EARLY_FULL_PAYOFF,
+  // Paying off a week that was missed. A reward, but deliberately smaller
+  // than LATE_CONTRIBUTION so a missed-then-paid week is still a net loss —
+  // see contribution-ledger.spec.ts, which asserts that ordering.
+  MultiplierEventType.ARREARS_CLEARED,
 ];
 
 const PENALTIES = [

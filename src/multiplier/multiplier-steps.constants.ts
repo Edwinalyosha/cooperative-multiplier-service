@@ -63,6 +63,18 @@ export const MULTIPLIER_STEPS: Record<MultiplierEventType, number> = {
   /** Every 3rd consecutive on-time contribution, on top of the above. */
   CONSECUTIVE_ON_TIME_CONTRIBUTIONS: -0.02,
   LATE_CONTRIBUTION: 0.02,
+  /**
+   * Paying off a week that was missed. A missed week is DEFERRED, not
+   * forgiven — it stays owed, interest-free, until cleared.
+   *
+   * MUST stay smaller in magnitude than LATE_CONTRIBUTION, or missing a week
+   * and paying it later becomes a net GAIN and the whole obligation is
+   * gameable. At -0.005 against +0.020, a missed-then-paid week still costs
+   * +0.015 — cheaper than never paying, dearer than paying on time, which is
+   * exactly the ordering the incentive needs. Asserted in
+   * contribution-ledger.spec.ts.
+   */
+  ARREARS_CLEARED: -0.005,
 
   // Loan repayments
   ON_TIME_REPAYMENT: -0.01,
@@ -77,6 +89,7 @@ export const MULTIPLIER_STEPS: Record<MultiplierEventType, number> = {
 export const REWARD_EVENTS: readonly MultiplierEventType[] = [
   MultiplierEventType.ON_TIME_CONTRIBUTION,
   MultiplierEventType.CONSECUTIVE_ON_TIME_CONTRIBUTIONS,
+  MultiplierEventType.ARREARS_CLEARED,
   MultiplierEventType.ON_TIME_REPAYMENT,
   MultiplierEventType.EARLY_FULL_PAYOFF,
 ];
