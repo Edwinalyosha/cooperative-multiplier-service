@@ -6,6 +6,7 @@ import { ContributionSweepScheduler } from './contribution-sweep.scheduler';
 import { SavingsHoldReleaseScheduler } from './savings-hold-release.scheduler';
 // RepaymentAssessmentService comes from LoansModule, already imported below.
 import { RepaymentSweepScheduler } from './repayment-sweep.scheduler';
+import { SweepsController } from './sweeps.controller';
 import { MultiplierModule } from '../multiplier/multiplier.module';
 import { QueueModule } from '../queue/queue.module';
 import { PrismaModule } from '../prisma/prisma.module';
@@ -54,5 +55,8 @@ import { FineractModule } from '../fineract/fineract.module';
     SavingsHoldReleaseScheduler,
     RepaymentSweepScheduler,
   ],
+  // Manual triggers for the same sweeps. Safe because every sweep is
+  // idempotent by construction — see SweepsController.
+  controllers: [SweepsController],
 })
 export class SchedulerModule {}
