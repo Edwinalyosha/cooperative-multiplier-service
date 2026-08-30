@@ -5,6 +5,8 @@ import { FineractService } from '../fineract/fineract.service';
 import { MultiplierEventType } from '../multiplier/multiplier-event.enum';
 import { RecordContributionDto } from './dto/record-contribution.dto';
 import { RecordDepositDto } from './dto/record-deposit.dto';
+import { PrismaService } from '../prisma/prisma.service';
+import { ConfigService } from '@nestjs/config';
 
 @Injectable()
 export class ContributionsService {
@@ -14,6 +16,8 @@ export class ContributionsService {
     private readonly multiplierService: MultiplierService,
     private readonly queue: MultiplierQueueService,
     private readonly fineract: FineractService,
+    private readonly prisma: PrismaService,
+    private readonly config: ConfigService,
   ) {}
 
   /**
@@ -85,6 +89,86 @@ export class ContributionsService {
   /** How money may be recorded as arriving — cash, mobile money, transfer. */
   getPaymentTypes() {
     return this.fineract.getPaymentTypes();
+  }
+
+  /**
+   * Creates the member's contributions account, if they do not already have
+   * one. Idempotent: returns the existing account rather than making a second,
+   * because two contributions accounts would split a member's balance and
+   * quietly halve their borrowing limit.
+   */
+  async ensureContributionsAccount(
+    clientId: number,
+  ): Promise<{ accountId: number; created: boolean }> {
+    const existing = await this.fineract.getContributionsAccountId(clientId);
+    if (existing != null) return { accountId: existing, created: false };
+
+    const productId = this.config.get<number>(
+      'fineract.contributionsProductId',
+    );
+    if (productId == null) {
+      throw new BadRequestException(
+        'FINERACT_CONTRIBUTIONS_PRODUCT_ID is not configured, so there is no ' +
+          'product to create the account against.',
+      );
+    }
+
+    const accountId = await this.fineract.createSavingsAccount({
+      clientId,
+      productId,
+    });
+
+    return { accountId, created: true };
+  }
+
+  /**
+   * What is set up and what is missing, per member.
+   *
+   * Tonight's onboarding pain was accounts that were half-built and looked
+   * fine: a login with no authorisation row, an authorisation row pointing at
+   * a client that did not exist, a member with savings but no contributions
+   * account. Each was invisible until someone tried to use it. This puts all
+   * of it on one screen.
+   */
+  async memberSetup() {
+    const directors = await this.prisma.directorMultiplier.findMany({
+      select: { clientId: true },
+      orderBy: { clientId: 'asc' },
+    });
+
+    const users = await this.prisma.user.findMany({
+      select: { clientId: true, username: true, role: true },
+    });
+
+    return Promise.all(
+      directors.map(async (director) => {
+        const user = users.find((u) => u.clientId === director.clientId);
+
+        // Read failures are reported as "unknown" rather than "missing" — a
+        // Fineract outage must not read as a member who needs setting up.
+        let contributionsAccountId: number | null | 'unknown' = 'unknown';
+        let savingsAccountId: number | null | 'unknown' = 'unknown';
+        try {
+          contributionsAccountId =
+            await this.fineract.getContributionsAccountId(director.clientId);
+          savingsAccountId = await this.fineract.getSavingsAccountId(
+            director.clientId,
+          );
+        } catch {
+          /* leave as unknown */
+        }
+
+        return {
+          clientId: director.clientId,
+          username: user?.username ?? null,
+          role: user?.role ?? null,
+          hasLogin: user != null,
+          contributionsAccountId,
+          savingsAccountId,
+          ready: user != null && typeof contributionsAccountId === 'number',
+        };
+      }),
+    );
   }
 
   async recordContribution(dto: RecordContributionDto, async = false) {

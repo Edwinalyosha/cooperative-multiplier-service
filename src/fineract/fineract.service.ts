@@ -554,6 +554,61 @@ export class FineractService {
     return response.resourceId;
   }
 
+  /**
+   * Creates a savings account and takes it all the way to ACTIVE.
+   *
+   * Three Fineract calls, not one: submit, approve, activate. An account that
+   * is approved but not activated looks perfectly normal in every list and
+   * silently accepts no money — which is the single most common mistake when
+   * doing this by hand, and it would leave a member unable to contribute
+   * while appearing set up.
+   *
+   * Returns the account id. Not idempotent by itself — callers should check
+   * for an existing account first.
+   */
+  async createSavingsAccount(params: {
+    clientId: number;
+    productId: number;
+    date?: Date;
+  }): Promise<number> {
+    const on = FineractService.formatFineractDate(params.date ?? new Date());
+    const dates = { locale: 'en', dateFormat: 'dd MMMM yyyy' };
+
+    const created = await this.post<{
+      savingsId?: number;
+      resourceId?: number;
+    }>('/savingsaccounts', {
+      clientId: params.clientId,
+      productId: params.productId,
+      submittedOnDate: on,
+      ...dates,
+    });
+
+    const accountId = created.savingsId ?? created.resourceId;
+    if (!accountId) {
+      throw new Error(
+        'Fineract accepted the savings application but returned no account id.',
+      );
+    }
+
+    await this.post(`/savingsaccounts/${accountId}?command=approve`, {
+      approvedOnDate: on,
+      ...dates,
+    });
+
+    await this.post(`/savingsaccounts/${accountId}?command=activate`, {
+      activatedOnDate: on,
+      ...dates,
+    });
+
+    this.logger.log(
+      `Created and activated savings account ${accountId} (product ` +
+        `${params.productId}) for client ${params.clientId}.`,
+    );
+
+    return accountId;
+  }
+
   /** Reverses a savings transaction — the correction path for a mistyped
    * deposit. */
   async undoSavingsTransaction(params: {

@@ -60,6 +60,33 @@ export class ContributionsController {
   }
 
   @Roles(UserRole.FINANCE_MANAGER)
+  @Get('member-setup')
+  @ApiOperation({
+    summary:
+      'What is set up and what is missing, per member: login, contributions ' +
+      'account, savings account. A Fineract read failure reports "unknown" ' +
+      'rather than "missing", so an outage does not look like a member who ' +
+      'needs setting up.',
+  })
+  memberSetup() {
+    return this.contributionsService.memberSetup();
+  }
+
+  @Roles(UserRole.FINANCE_MANAGER)
+  @Post(':clientId/account')
+  @ApiOperation({
+    summary:
+      "Create the member's contributions account and activate it. Three " +
+      'Fineract steps in one call — submit, approve, activate — because an ' +
+      'account left approved-but-not-activated looks normal everywhere and ' +
+      'silently accepts no money. Idempotent: returns an existing account ' +
+      'rather than creating a second, which would split their balance.',
+  })
+  createContributionsAccount(@Param('clientId', ParseIntPipe) clientId: number) {
+    return this.contributionsService.ensureContributionsAccount(clientId);
+  }
+
+  @Roles(UserRole.FINANCE_MANAGER)
   @Post(':clientId/deposit')
   @ApiOperation({
     summary:
