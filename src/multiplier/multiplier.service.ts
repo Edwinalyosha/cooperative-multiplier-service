@@ -143,7 +143,48 @@ export class MultiplierService {
   }
 
   private get savingsFactor(): number {
-    return this.config.get<number>('multiplier.savingsFactor') ?? 1.0;
+    return this.config.get<number>('multiplier.savingsFactor') ?? 1.2;
+  }
+
+  /**
+   * A member's ownership share of the cooperative: their contributions as a
+   * percentage of everyone's.
+   *
+   * Contributions ONLY — savings are explicitly excluded. Savings are the
+   * member's own money held with the cooperative and confer no ownership, so
+   * counting them here would hand someone a larger slice of the profits for
+   * money they can withdraw the same day.
+   *
+   * Computed live rather than stored: a stored percentage is wrong the moment
+   * anyone else contributes, and every member's share changes every time any
+   * one of them pays in.
+   */
+  async getOwnershipShare(clientId: number): Promise<{
+    contributionBalance: number;
+    totalContributions: number;
+    sharePercentage: number;
+    memberCount: number;
+  }> {
+    const rows = await this.prisma.directorMultiplier.findMany({
+      select: { clientId: true, contributionBalance: true },
+    });
+
+    const total = rows.reduce(
+      (sum, row) => sum + Number(row.contributionBalance ?? 0),
+      0,
+    );
+    const mine = Number(
+      rows.find((row) => row.clientId === clientId)?.contributionBalance ?? 0,
+    );
+
+    return {
+      contributionBalance: mine,
+      totalContributions: total,
+      // Before anyone has contributed the honest answer is 0, not a division
+      // by zero and not an implied equal split.
+      sharePercentage: total > 0 ? Number(((mine / total) * 100).toFixed(2)) : 0,
+      memberCount: rows.length,
+    };
   }
 
   private get minEligibleLoan(): number {

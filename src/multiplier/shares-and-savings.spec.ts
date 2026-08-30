@@ -91,6 +91,91 @@ describe('contributions vs savings', () => {
     expect(result.cappedAtMax).toBe(true);
   });
 
+  describe('ownership share', () => {
+    function buildWithMembers(
+      members: { clientId: number; contributionBalance: number | null }[],
+    ) {
+      const prisma = {
+        directorMultiplier: { findMany: jest.fn(async () => members) },
+      } as unknown as PrismaService;
+
+      return new MultiplierService(
+        prisma,
+        {} as unknown as FineractService,
+        { get: () => undefined } as unknown as ConfigService,
+      );
+    }
+
+    it('reports a member share as a percentage of all contributions', async () => {
+      const service = buildWithMembers([
+        { clientId: 1, contributionBalance: 100000 },
+        { clientId: 2, contributionBalance: 300000 },
+      ]);
+
+      const result = await service.getOwnershipShare(1);
+      expect(result.sharePercentage).toBe(25);
+      expect(result.totalContributions).toBe(400000);
+      expect(result.memberCount).toBe(2);
+    });
+
+    it('excludes savings from ownership', async () => {
+      // Savings are the member's own money held with the cooperative. If they
+      // counted here, someone could deposit on the eve of a profit split,
+      // take a larger slice, and withdraw the next day.
+      const service = buildWithMembers([
+        { clientId: 1, contributionBalance: 100000 },
+        { clientId: 2, contributionBalance: 100000 },
+      ]);
+
+      // Both members hold equal CONTRIBUTIONS; whatever either has in
+      // savings is not part of this calculation at all.
+      const result = await service.getOwnershipShare(1);
+      expect(result.sharePercentage).toBe(50);
+    });
+
+    it('reports zero before anyone has contributed', async () => {
+      // Not a division by zero, and not an implied equal split.
+      const service = buildWithMembers([
+        { clientId: 1, contributionBalance: 0 },
+        { clientId: 2, contributionBalance: null },
+      ]);
+
+      const result = await service.getOwnershipShare(1);
+      expect(result.sharePercentage).toBe(0);
+      expect(result.totalContributions).toBe(0);
+    });
+
+    it('gives a member who has contributed nothing a zero share', async () => {
+      const service = buildWithMembers([
+        { clientId: 1, contributionBalance: 0 },
+        { clientId: 2, contributionBalance: 500000 },
+      ]);
+
+      const result = await service.getOwnershipShare(1);
+      expect(result.sharePercentage).toBe(0);
+    });
+
+    it('has all members sum to 100%', async () => {
+      // The property that makes it a share of something real. Thirds do not
+      // divide evenly, so this also pins the rounding.
+      const members = [
+        { clientId: 1, contributionBalance: 100000 },
+        { clientId: 2, contributionBalance: 100000 },
+        { clientId: 3, contributionBalance: 100000 },
+      ];
+      const service = buildWithMembers(members);
+
+      const shares = await Promise.all(
+        members.map((m) =>
+          service.getOwnershipShare(m.clientId).then((r) => r.sharePercentage),
+        ),
+      );
+
+      expect(shares).toEqual([33.33, 33.33, 33.33]);
+      expect(shares.reduce((a, b) => a + b, 0)).toBeCloseTo(99.99, 2);
+    });
+  });
+
   it('a better multiplier rewards contributions, not savings', () => {
     // Improving from 1.000 (multiple 2.189) to the best rate (multiple 5)
     // must move the contribution half only. 50,000 stake gains 140,550;

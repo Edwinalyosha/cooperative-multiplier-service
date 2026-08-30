@@ -42,6 +42,17 @@ export class MobileController {
     return this.mobileService.getDashboard(clientId);
   }
 
+  @Get('ownership/:clientId')
+  @ApiOperation({
+    summary:
+      "Member's ownership share — their contributions as a percentage of " +
+      'all members\' contributions. Savings are excluded: they are the ' +
+      'member\'s own money and confer no ownership.',
+  })
+  ownership(@Param('clientId', ParseIntPipe) clientId: number) {
+    return this.mobileService.getOwnershipShare(clientId);
+  }
+
   @Get('profile/:clientId')
   @ApiOperation({ summary: 'Director multiplier profile' })
   profile(@Param('clientId', ParseIntPipe) clientId: number) {

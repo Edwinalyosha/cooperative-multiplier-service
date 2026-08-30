@@ -12,7 +12,7 @@ export class MobileService {
   ) {}
 
   async getDashboard(clientId: number) {
-    const [profile, eligibility, recentHistory, fineractBalance] =
+    const [profile, eligibility, recentHistory, fineractBalance, ownership] =
       await Promise.all([
         this.multiplierService.getProfile(clientId),
         this.multiplierService
@@ -20,6 +20,9 @@ export class MobileService {
           .catch(() => null),
         this.multiplierService.getHistory(clientId, 5),
         this.fineractService.getContributionBalance(clientId),
+        // Never fatal: a member should still get their dashboard if the share
+        // calculation fails.
+        this.multiplierService.getOwnershipShare(clientId).catch(() => null),
       ]);
 
     return {
@@ -27,9 +30,14 @@ export class MobileService {
       profile,
       eligibility,
       fineractContributionBalance: fineractBalance,
+      ownership,
       recentHistory,
       tips: this.buildTips(profile, eligibility),
     };
+  }
+
+  getOwnershipShare(clientId: number) {
+    return this.multiplierService.getOwnershipShare(clientId);
   }
 
   getProfile(clientId: number) {

@@ -88,18 +88,22 @@ export default () => ({
      * How much each shilling of ordinary savings adds to a member's borrowing
      * limit: `limit = contributions x loanMultiple + savings x savingsFactor`.
      *
-     * 1.0 by default — savings count at face value. Contributions are
-     * leveraged 1-5x because they are committed capital that also earns the
-     * multiplier; savings are withdrawable, so lending more against them than
-     * they are worth would let a member borrow and then remove the backing.
-     * Below 1.0 would penalise money the member has actually placed with the
-     * cooperative.
+     * 1.2 by default: a 20% bonus for pledging savings as collateral.
+     *
+     * A factor above 1.0 is only sound while the pledged portion is LOCKED in
+     * Fineract for the life of the loan. Freely withdrawable savings could
+     * otherwise be saved, borrowed against, and withdrawn — leaving the fund
+     * lending 1.2 against nothing. The unsecured 0.2 is deliberate and small,
+     * and sits behind the requirement that a guarantor covers the whole
+     * principal.
+     *
+     * If the hold mechanism is ever disabled, drop this to 1.0 or below.
      *
      * Savings deliberately do NOT move the multiplier. Contributions buy a
      * better RATE; savings buy CAPACITY only. A member with no savings account
      * is not disadvantaged — contributions alone carry the full 1-5x.
      */
-    savingsFactor: optionalFloat(process.env.SAVINGS_FACTOR) ?? 1.0,
+    savingsFactor: optionalFloat(process.env.SAVINGS_FACTOR) ?? 1.2,
     steps: {
       ON_TIME_CONTRIBUTION: optionalFloat(process.env.STEP_ON_TIME_CONTRIBUTION),
       CONSECUTIVE_ON_TIME_CONTRIBUTIONS: optionalFloat(
