@@ -103,6 +103,19 @@ export class ContributionsService {
     const existing = await this.fineract.getContributionsAccountId(clientId);
     if (existing != null) return { accountId: existing, created: false };
 
+    // A DirectorMultiplier row can outlive — or precede — its Fineract client.
+    // Three such orphans were found on 2026-08-29, pointing at clients that
+    // had never existed. Creating an account against one fails deep inside
+    // Fineract with an unhelpful error, so say plainly what is wrong.
+    const client = await this.fineract.getClient(clientId);
+    if (client == null) {
+      throw new BadRequestException(
+        `There is no Fineract client ${clientId}, so no account can be ` +
+          'created for it. This member record points at a client that does ' +
+          'not exist and should be removed.',
+      );
+    }
+
     const productId = this.config.get<number>(
       'fineract.contributionsProductId',
     );
@@ -145,15 +158,30 @@ export class ContributionsService {
         const user = users.find((u) => u.clientId === director.clientId);
 
         // Read failures are reported as "unknown" rather than "missing" — a
-        // Fineract outage must not read as a member who needs setting up.
+        // Fineract outage must not read as a member who needs setting up, or
+        // someone presses "create account" on a member who already has one.
         let contributionsAccountId: number | null | 'unknown' = 'unknown';
         let savingsAccountId: number | null | 'unknown' = 'unknown';
+        // Whether the Fineract CLIENT exists at all — a different question
+        // from whether they have an account, and one this view got wrong
+        // until 2026-08-30: an orphaned member record showed "no
+        // contributions account" and offered a Create button that could only
+        // ever fail.
+        let existsInFineract: boolean | 'unknown' = 'unknown';
+
         try {
-          contributionsAccountId =
-            await this.fineract.getContributionsAccountId(director.clientId);
-          savingsAccountId = await this.fineract.getSavingsAccountId(
-            director.clientId,
-          );
+          existsInFineract =
+            (await this.fineract.getClient(director.clientId)) != null;
+          if (existsInFineract) {
+            contributionsAccountId =
+              await this.fineract.getContributionsAccountId(director.clientId);
+            savingsAccountId = await this.fineract.getSavingsAccountId(
+              director.clientId,
+            );
+          } else {
+            contributionsAccountId = null;
+            savingsAccountId = null;
+          }
         } catch {
           /* leave as unknown */
         }
@@ -163,9 +191,13 @@ export class ContributionsService {
           username: user?.username ?? null,
           role: user?.role ?? null,
           hasLogin: user != null,
+          existsInFineract,
           contributionsAccountId,
           savingsAccountId,
-          ready: user != null && typeof contributionsAccountId === 'number',
+          ready:
+            user != null &&
+            existsInFineract === true &&
+            typeof contributionsAccountId === 'number',
         };
       }),
     );
