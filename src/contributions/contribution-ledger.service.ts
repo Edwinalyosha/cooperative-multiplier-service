@@ -336,6 +336,66 @@ export class ContributionLedgerService {
     return { created, skipped };
   }
 
+  /**
+   * Every member with what they owe — the finance manager's collection sheet.
+   *
+   * Ordered by arrears descending so whoever is furthest behind is at the
+   * top, which is the order a collection conversation actually happens in.
+   */
+  async collectionSheet(): Promise<
+    { clientId: number; arrearsTotal: number; arrearsWeeks: number }[]
+  > {
+    const rows = await this.prisma.contributionPeriod.findMany({
+      where: { status: { in: [STATUS_OPEN, STATUS_ARREARS] } },
+      select: {
+        clientId: true,
+        amountDue: true,
+        amountPaid: true,
+        periodStart: true,
+      },
+    });
+
+    const byClient = new Map<
+      number,
+      { clientId: number; arrearsTotal: number; arrearsWeeks: number }
+    >();
+
+    // Every director, including those who owe nothing — a collection sheet
+    // that silently omits the members who are paid up would leave the finance
+    // manager unable to tell "nothing owed" from "not a member".
+    const directors = await this.prisma.directorMultiplier.findMany({
+      select: { clientId: true },
+    });
+    for (const director of directors) {
+      byClient.set(director.clientId, {
+        clientId: director.clientId,
+        arrearsTotal: 0,
+        arrearsWeeks: 0,
+      });
+    }
+
+    for (const row of rows) {
+      const outstanding = Math.max(
+        0,
+        Number(row.amountDue) - Number(row.amountPaid),
+      );
+      if (outstanding === 0) continue;
+
+      const entry = byClient.get(row.clientId) ?? {
+        clientId: row.clientId,
+        arrearsTotal: 0,
+        arrearsWeeks: 0,
+      };
+      entry.arrearsTotal += outstanding;
+      entry.arrearsWeeks += 1;
+      byClient.set(row.clientId, entry);
+    }
+
+    return [...byClient.values()].sort(
+      (a, b) => b.arrearsTotal - a.arrearsTotal || a.clientId - b.clientId,
+    );
+  }
+
   /** Every unpaid week, oldest first — what a member sees as "what I owe". */
   async listArrears(clientId: number) {
     const rows = await this.prisma.contributionPeriod.findMany({

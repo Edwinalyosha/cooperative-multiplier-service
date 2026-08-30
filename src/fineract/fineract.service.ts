@@ -466,6 +466,107 @@ export class FineractService {
     );
   }
 
+  /**
+   * The member's CONTRIBUTIONS account — where the weekly obligation is paid.
+   *
+   * Distinct from getSavingsAccountId: money in the wrong one earns no
+   * multiplier, is not leveraged into the borrowing limit, and does not count
+   * toward the profit split. Null when they have none, which is a setup
+   * error rather than a normal state.
+   */
+  async getContributionsAccountId(clientId: number): Promise<number | null> {
+    if (!this.isConfigured()) return null;
+
+    const accounts = await this.getClientAccounts(clientId);
+    if (!accounts?.savingsAccounts?.length) return null;
+
+    const match = this.accountsForProduct(
+      accounts.savingsAccounts,
+      this.contributionsProductId,
+    );
+    return match[0]?.id ?? null;
+  }
+
+  /**
+   * How money may be recorded as arriving — cash, mobile money, transfer.
+   *
+   * Fineract requires one on every deposit, and it is what makes the ledger
+   * auditable at reconciliation time: "how did this arrive" is a real
+   * question later.
+   */
+  async getPaymentTypes(): Promise<
+    { id: number; name: string; isCashPayment: boolean }[]
+  > {
+    const types = await this.get<
+      {
+        id: number;
+        name: string;
+        isCashPayment?: boolean;
+        isSystemDefined?: boolean;
+        position?: number;
+      }[]
+    >('/paymenttypes');
+
+    return types
+      // System-defined types are Fineract's own internal ones — "Repayment
+      // Adjustment Chargeback" and the like. Offering them for a member's
+      // weekly contribution would be nonsense, and picking one would put a
+      // misleading label on a real transaction.
+      .filter((type) => !type.isSystemDefined)
+      .sort((a, b) => (a.position ?? 0) - (b.position ?? 0))
+      .map((type) => ({
+        id: type.id,
+        name: type.name,
+        isCashPayment: type.isCashPayment ?? false,
+      }));
+  }
+
+  /**
+   * Records money arriving on a savings account.
+   *
+   * Shape verified against the live instance 2026-08-30, after two rejected
+   * attempts: it takes `transactionAmount` (not `amount`) and `paymentTypeId`
+   * is MANDATORY — a deposit with no payment type is refused outright.
+   * Reversible via undoSavingsTransaction, which was verified at the same
+   * time; a finance manager will mistype an amount eventually.
+   */
+  async depositToSavings(params: {
+    savingsAccountId: number;
+    amount: number;
+    paymentTypeId: number;
+    date?: Date;
+    note?: string;
+  }): Promise<number> {
+    const response = await this.post<{ resourceId: number }>(
+      `/savingsaccounts/${params.savingsAccountId}/transactions?command=deposit`,
+      {
+        transactionAmount: params.amount,
+        paymentTypeId: params.paymentTypeId,
+        transactionDate: FineractService.formatFineractDate(
+          params.date ?? new Date(),
+        ),
+        locale: 'en',
+        dateFormat: 'dd MMMM yyyy',
+        ...(params.note ? { note: params.note } : {}),
+      },
+    );
+
+    return response.resourceId;
+  }
+
+  /** Reverses a savings transaction — the correction path for a mistyped
+   * deposit. */
+  async undoSavingsTransaction(params: {
+    savingsAccountId: number;
+    transactionId: number;
+  }): Promise<void> {
+    await this.post(
+      `/savingsaccounts/${params.savingsAccountId}/transactions/` +
+        `${params.transactionId}?command=undo`,
+      {},
+    );
+  }
+
   private get contributionsProductId(): number | undefined {
     return this.config.get<number>('fineract.contributionsProductId');
   }
