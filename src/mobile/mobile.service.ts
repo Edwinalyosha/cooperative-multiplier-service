@@ -61,27 +61,32 @@ export class MobileService {
       eligibility,
       recentHistory,
       fineractBalance,
-      ownership,
       outstandingLoanBalance,
       thisWeek,
     ] = await Promise.all([
-        this.multiplierService.getProfile(clientId),
-        this.multiplierService
-          .getEligibility(clientId)
-          .catch(() => null),
-        this.multiplierService.getHistory(clientId, 5),
-        this.fineractService.getContributionBalance(clientId),
-        // Never fatal: a member should still get their dashboard if the share
-        // calculation fails.
-        this.multiplierService.getOwnershipShare(clientId).catch(() => null),
-        // What they currently owe. null means "could not read", which the UI
-        // must show differently from 0 — telling a borrower they owe nothing
-        // because Fineract was briefly down would be worse than saying so.
-        this.fineractService
-          .getOutstandingLoanBalance(clientId)
-          .catch(() => null),
-        this.getThisWeek(clientId),
-      ]);
+      this.multiplierService.getProfile(clientId),
+      this.multiplierService.getEligibility(clientId).catch(() => null),
+      this.multiplierService.getHistory(clientId, 5),
+      this.fineractService.getContributionBalance(clientId),
+      // What they currently owe. null means "could not read", which the UI
+      // must show differently from 0 — telling a borrower they owe nothing
+      // because Fineract was briefly down would be worse than saying so.
+      this.fineractService.getOutstandingLoanBalance(clientId).catch(() => null),
+      this.getThisWeek(clientId),
+    ]);
+
+    // AFTER the eligibility refresh, not alongside it.
+    //
+    // getOwnershipShare sums DirectorMultiplier.contributionBalance across
+    // every member, and getEligibility is what WRITES that column for this
+    // member. Run concurrently, the share could be computed from the value
+    // eligibility was in the middle of replacing — which is exactly what
+    // happened when contributions and savings were split: the dashboard
+    // showed "contributions UGX 0" beside "65% of the cooperative", the share
+    // still being derived from pre-split balances that were really savings.
+    const ownership = await this.multiplierService
+      .getOwnershipShare(clientId)
+      .catch(() => null);
 
     return {
       clientId,
