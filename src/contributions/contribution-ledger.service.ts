@@ -267,6 +267,75 @@ export class ContributionLedgerService {
     );
   }
 
+  /**
+   * Records weeks a director already owed before the system existed.
+   *
+   * Both timestamps are stamped at seed time, and neither records anything
+   * that happened:
+   *
+   *  - `penaltyAppliedAt` PREVENTS a penalty. Without it the sweep would
+   *    assess these weeks and drop everyone's multiplier for months they were
+   *    never measured on.
+   *  - `arrearsRewardAppliedAt` prevents the catch-up reward. There was no
+   *    penalty to compensate, and rewarding it would hand the largest
+   *    multiplier improvement to whoever owed the most at launch — paying the
+   *    least diligent member best.
+   *
+   * The debt is real and still owed; only its effect on the multiplier is
+   * suppressed. Refuses to touch a week that already has a row, so a repeated
+   * run cannot overwrite a real assessment with an opening balance.
+   */
+  async seedOpeningArrears(
+    clientId: number,
+    weeks: { periodStart: string; periodEnd: string; amountDue: number; amountPaid?: number }[],
+  ): Promise<{ created: string[]; skipped: string[] }> {
+    const created: string[] = [];
+    const skipped: string[] = [];
+    const now = new Date();
+
+    for (const week of weeks) {
+      const existing = await this.prisma.contributionPeriod.findUnique({
+        where: {
+          clientId_periodStart: {
+            clientId,
+            periodStart: new Date(week.periodStart),
+          },
+        },
+      });
+
+      if (existing) {
+        skipped.push(week.periodStart);
+        continue;
+      }
+
+      const paid = week.amountPaid ?? 0;
+      const settled = paid >= week.amountDue;
+
+      await this.prisma.contributionPeriod.create({
+        data: {
+          clientId,
+          periodStart: new Date(week.periodStart),
+          periodEnd: new Date(week.periodEnd),
+          amountDue: week.amountDue,
+          amountPaid: paid,
+          status: settled ? STATUS_SATISFIED : STATUS_ARREARS,
+          satisfiedAt: settled ? now : null,
+          penaltyAppliedAt: now,
+          arrearsRewardAppliedAt: now,
+        },
+      });
+
+      created.push(week.periodStart);
+    }
+
+    this.logger.log(
+      `Seeded opening arrears for client ${clientId}: ` +
+        `${created.length} created, ${skipped.length} already existed.`,
+    );
+
+    return { created, skipped };
+  }
+
   /** Every unpaid week, oldest first — what a member sees as "what I owe". */
   async listArrears(clientId: number) {
     const rows = await this.prisma.contributionPeriod.findMany({

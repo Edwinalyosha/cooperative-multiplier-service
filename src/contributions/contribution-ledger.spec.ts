@@ -88,6 +88,25 @@ describe('contribution ledger', () => {
           rows.push(created);
           return created;
         }),
+        findUnique: jest.fn(async (args: never) => {
+          const a = args as unknown as {
+            where: { clientId_periodStart: { periodStart: Date } };
+          };
+          const key = a.where.clientId_periodStart.periodStart
+            .toISOString()
+            .slice(0, 10);
+          return (
+            rows.find((r) => r.periodStart.toISOString().slice(0, 10) === key) ??
+            null
+          );
+        }),
+        create: jest.fn(async (args: never) => {
+          const a = args as unknown as { data: Record<string, unknown> };
+          const created = { ...a.data, id: nextId++ } as unknown as Row;
+          rows.push(created);
+          return created;
+        }),
+        count: jest.fn(async () => rows.length),
         findMany: jest.fn(async (args: never) => {
           const a = args as unknown as {
             where: { status?: { in: string[] } };
@@ -303,6 +322,78 @@ describe('contribution ledger', () => {
       expect(missedThenPaid).toBeGreaterThan(0);       // still a net loss
       expect(missedThenPaid).toBeLessThan(penalty);    // better than never paying
       expect(missedThenPaid).toBeGreaterThan(onTime);  // worse than paying on time
+    });
+  });
+
+  describe('opening arrears seeded at launch', () => {
+    const buildSeeding = build;
+
+    const WEEKS = [
+      {
+        periodStart: '2026-07-06',
+        periodEnd: '2026-07-12',
+        amountDue: 20000,
+      },
+    ];
+
+    it('records the debt as arrears', async () => {
+      const ledger = buildSeeding();
+      const result = await ledger.seedOpeningArrears(CLIENT, WEEKS);
+
+      expect(result.created).toEqual(['2026-07-06']);
+      expect(await ledger.getArrears(CLIENT)).toBe(20000);
+    });
+
+    it('charges no multiplier penalty for weeks that predate the system', async () => {
+      // Assessing months nobody was ever measured on would drop every
+      // member's multiplier at launch, for behaviour the cooperative had not
+      // yet defined.
+      const ledger = buildSeeding();
+      await ledger.seedOpeningArrears(CLIENT, WEEKS);
+      expect(events).toHaveLength(0);
+    });
+
+    it('stamps both timestamps, so the week is never penalised OR rewarded', async () => {
+      const ledger = buildSeeding();
+      await ledger.seedOpeningArrears(CLIENT, WEEKS);
+
+      const seeded = rows.find(
+        (r) => r.periodStart.toISOString().slice(0, 10) === '2026-07-06',
+      )!;
+      expect(seeded.penaltyAppliedAt).not.toBeNull();
+      expect(seeded.arrearsRewardAppliedAt).not.toBeNull();
+    });
+
+    it('refuses to overwrite a week that already has a real assessment', async () => {
+      const ledger = buildSeeding();
+      rows.push(
+        row('2026-07-06', {
+          status: 'ARREARS',
+          penaltyAppliedAt: new Date('2026-07-13'),
+        }),
+      );
+
+      const result = await ledger.seedOpeningArrears(CLIENT, WEEKS);
+      expect(result.created).toEqual([]);
+      expect(result.skipped).toEqual(['2026-07-06']);
+    });
+
+    it('accepts a part-paid week', async () => {
+      const ledger = buildSeeding();
+      await ledger.seedOpeningArrears(CLIENT, [
+        { ...WEEKS[0], amountPaid: 5000 },
+      ]);
+      expect(await ledger.getArrears(CLIENT)).toBe(15000);
+    });
+
+    it('honours a week whose amount differed from today', async () => {
+      // The weekly figure changes over time; each seeded week carries the
+      // amount that actually applied then.
+      const ledger = buildSeeding();
+      await ledger.seedOpeningArrears(CLIENT, [
+        { ...WEEKS[0], amountDue: 15000 },
+      ]);
+      expect(await ledger.getArrears(CLIENT)).toBe(15000);
     });
   });
 
