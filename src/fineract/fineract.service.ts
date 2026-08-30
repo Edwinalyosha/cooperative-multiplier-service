@@ -16,6 +16,8 @@ import {
   FineractSavingsAccountDetail,
   FineractSavingsAccountSummary,
   FineractLoanWithSchedule,
+  FineractGlAccount,
+  FineractJournalEntry,
   FineractLoanProductDetail,
   CreateFineractLoanParams,
   CreateFineractLoanResponse,
@@ -396,6 +398,78 @@ export class FineractService {
     return this.sumBalances(
       this.accountsForProduct(accounts.savingsAccounts, this.savingsProductId),
     );
+  }
+
+  /** The chart of accounts. */
+  async getGlAccounts(): Promise<FineractGlAccount[]> {
+    return this.get<FineractGlAccount[]>('/glaccounts');
+  }
+
+  /**
+   * Posts a two-sided journal entry.
+   *
+   * Shape verified against the live instance 2026-08-30. Returns a
+   * `transactionId` — a STRING hash, not a number — which is what a reversal
+   * takes, so it must be persisted rather than reconstructed.
+   *
+   * Fineract will reject an entry whose debits and credits differ, which is
+   * the ledger enforcing double entry for us.
+   */
+  async createJournalEntry(params: {
+    debits: { glAccountId: number; amount: number }[];
+    credits: { glAccountId: number; amount: number }[];
+    comments: string;
+    date?: Date;
+    currencyCode?: string;
+    officeId?: number;
+    referenceNumber?: string;
+  }): Promise<string> {
+    const response = await this.post<{ transactionId: string }>(
+      '/journalentries',
+      {
+        officeId: params.officeId ?? 1,
+        transactionDate: FineractService.formatFineractDate(
+          params.date ?? new Date(),
+        ),
+        currencyCode: params.currencyCode ?? 'UGX',
+        debits: params.debits,
+        credits: params.credits,
+        comments: params.comments,
+        ...(params.referenceNumber
+          ? { referenceNumber: params.referenceNumber }
+          : {}),
+        locale: 'en',
+        dateFormat: 'dd MMMM yyyy',
+      },
+    );
+
+    return response.transactionId;
+  }
+
+  /**
+   * Reverses a journal entry.
+   *
+   * Note the ledger is append-only: this POSTS an offsetting entry rather
+   * than deleting anything. Both remain visible, which is the point — an
+   * accounting record that could be erased would be worth nothing.
+   */
+  async reverseJournalEntry(
+    transactionId: string,
+    comments: string,
+  ): Promise<void> {
+    await this.post(`/journalentries/${transactionId}?command=reverse`, {
+      comments,
+      locale: 'en',
+      dateFormat: 'dd MMMM yyyy',
+    });
+  }
+
+  /** Recent journal entries, newest first. */
+  async getJournalEntries(limit = 50): Promise<FineractJournalEntry[]> {
+    const response = await this.get<{ pageItems?: FineractJournalEntry[] }>(
+      `/journalentries?limit=${limit}&orderBy=id&sortOrder=DESC`,
+    );
+    return response.pageItems ?? [];
   }
 
   /**

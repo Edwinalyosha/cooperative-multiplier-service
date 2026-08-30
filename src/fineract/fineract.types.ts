@@ -138,6 +138,33 @@ export interface WithdrawFineractLoanParams {
 }
 
 /** Savings account fetched with `?associations=transactions`. */
+export interface FineractGlAccount {
+  id: number;
+  name: string;
+  glCode: string;
+  /** 1 Asset, 2 Liability, 3 Equity, 4 Income, 5 Expense. */
+  type?: { id?: number; value?: string };
+  usage?: { id?: number; value?: string };
+  manualEntriesAllowed?: boolean;
+  disabled?: boolean;
+}
+
+export interface FineractJournalEntry {
+  id: number;
+  /** Groups the two sides of one posting; what `reverse` takes. */
+  transactionId: string;
+  glAccountId?: number;
+  glAccountName?: string;
+  glAccountCode?: string;
+  transactionDate?: unknown;
+  /** 1 Credit, 2 Debit. */
+  entryType?: { id?: number; value?: string };
+  amount?: number;
+  comments?: string;
+  reversed?: boolean;
+  createdByUserName?: string;
+}
+
 /**
  * A loan's repayment schedule as Fineract holds it.
  *

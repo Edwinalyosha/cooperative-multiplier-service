@@ -17,6 +17,7 @@ import { QueueModule } from './queue/queue.module';
 import { SchedulerModule } from './scheduler/scheduler.module';
 import { ReportsModule } from './reports/reports.module';
 import { MobileModule } from './mobile/mobile.module';
+import { TreasuryModule } from './treasury/treasury.module';
 import { MobileJwtGuard } from './mobile-auth/guards/mobile-jwt.guard';
 import { RolesGuard } from './mobile-auth/guards/roles.guard';
 
@@ -50,6 +51,7 @@ import { RolesGuard } from './mobile-auth/guards/roles.guard';
     LoansModule,
     ReportsModule,
     MobileModule,
+    TreasuryModule,
   ],
   controllers: [AppController],
   providers: [
