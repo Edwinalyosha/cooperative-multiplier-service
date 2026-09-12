@@ -282,6 +282,42 @@ export class WebhooksService {
       throw error;
     }
 
+    // Create the DirectorMultiplier row NOW rather than leaving it to the
+    // member's first dashboard load.
+    //
+    // It was lazy (ensureDirector, called from getProfile / getHistory /
+    // refreshEligibility / processEvent), which left a resolved member with
+    // no row until they signed in — and the contribution sweep iterates
+    // DirectorMultiplier. A member who never logged in was therefore never
+    // assessed: no arrears, no penalty, while everyone who did log in was
+    // assessed normally. Inconsistent enforcement, and silent.
+    //
+    // It also fixes when the clock starts. `createdAt` on that row is what
+    // wasOpenForWholePeriod() uses to decide "too new to assess", so a member
+    // who first logged in three weeks after onboarding began counting three
+    // weeks late.
+    //
+    // DIRECTOR only: a finance manager who is not also a director has no
+    // weekly obligation and no multiplier, and a row for them would put a
+    // phantom member into the sweep and into the ownership-share denominator.
+    //
+    // Deliberately non-throwing. The mapping is committed and the member can
+    // log in; a failure here is repaired by any later ensureDirector call,
+    // whereas turning a successful onboarding into an error page tempts a
+    // retry that would hit `already_mapped`. Same reasoning as the email
+    // below.
+    if (role === UserRole.DIRECTOR) {
+      try {
+        await this.multiplierService.ensureDirector(clientId);
+      } catch (error) {
+        this.logger.error(
+          `Mapped client ${clientId} but could not create their ` +
+            'DirectorMultiplier row; they will not be swept until it exists: ' +
+            `${(error as Error)?.message ?? 'unknown error'}`,
+        );
+      }
+    }
+
     // Only now is "your portal access is ready" a true statement: the User
     // row exists and the member can actually log in. This is the moment the
     // n8n welcome email was firing far too early — it ran at Fineract

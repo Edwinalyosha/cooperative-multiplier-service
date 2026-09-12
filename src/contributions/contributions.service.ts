@@ -61,8 +61,43 @@ export class ContributionsService {
       transactionId,
       clientId,
       amount: dto.amount,
-      contributionBalance: await this.fineract.getContributionBalance(clientId),
+      contributionBalance: await this.refreshCachedEligibility(clientId),
     };
+  }
+
+  /**
+   * Re-reads the member's balance from Fineract AND writes it to the
+   * eligibility cache, returning the balance.
+   *
+   * This used to be a bare `getContributionBalance`, which returned the true
+   * figure to the caller while leaving the cached one untouched. Eligibility
+   * is cached for 60 minutes (ELIGIBILITY_CACHE_TTL_MINUTES), so a member who
+   * had just paid could see an unchanged balance and an unchanged borrowing
+   * limit for up to an hour — "I paid, why does it still say zero". It bit us
+   * during onboarding on 2026-09-12, where a dashboard loaded before the
+   * opening deposit cached a zero that then looked authoritative, because
+   * the cache guard tests `!= null` and 0 is not null.
+   *
+   * Never throws. The money has already moved in Fineract by the time this
+   * runs, so a failure here must not surface as a failed deposit and tempt a
+   * retry that would double-deposit. A stale cache self-heals within the TTL;
+   * a duplicated deposit does not.
+   */
+  private async refreshCachedEligibility(
+    clientId: number,
+  ): Promise<number | null> {
+    try {
+      const eligibility =
+        await this.multiplierService.refreshEligibility(clientId);
+      return eligibility.contributionBalance;
+    } catch (error) {
+      this.logger.warn(
+        `Could not refresh cached eligibility for client ${clientId} after a ` +
+          `balance change; it will self-heal when the cache expires: ` +
+          `${(error as Error)?.message ?? 'unknown error'}`,
+      );
+      return this.fineract.getContributionBalance(clientId);
+    }
   }
 
   /** Reverses a deposit recorded in error — a mistyped amount is inevitable
@@ -84,6 +119,13 @@ export class ContributionsService {
       `Reversed Fineract transaction ${transactionId} on client ${clientId}'s ` +
         'contributions account.',
     );
+
+    // A reversal moves the balance DOWN, so the same stale-cache problem
+    // applies and matters more: a cached balance from before the reversal
+    // overstates what the member owns and therefore overstates their
+    // borrowing limit. Of the two directions, this is the one that could
+    // lend against money that is no longer there.
+    await this.refreshCachedEligibility(clientId);
   }
 
   /** How money may be recorded as arriving — cash, mobile money, transfer. */
