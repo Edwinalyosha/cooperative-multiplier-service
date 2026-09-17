@@ -298,7 +298,21 @@ export class LoansService {
    * PENDING_FINANCE_APPROVAL. See context/loan-approval-workflow-spec.md.
    */
   /**
-   * The first approver's savings must cover the full principal.
+   * The first approver's CONTRIBUTIONS must cover the full principal.
+   *
+   * Contributions, not savings — and the distinction is the point. Savings
+   * are liquid and can be withdrawn the day after a guarantee is given;
+   * contributions are the locked-in ownership stake, so measuring capacity
+   * against them is the more conservative test. There is no fund hold on a
+   * guarantor (the guarantee is an accountability record, decided
+   * 2026-08-10), which makes "money they cannot casually remove" the
+   * meaningful measure.
+   *
+   * The message used to say "savings" while the code read contributions.
+   * That was not cosmetic: every member's savings balance is 0, so a reader
+   * who trusted the wording — or who "fixed" the code to match it — would
+   * have made every loan unguaranteeable and killed the approval flow.
+   * Corrected 2026-09-16; behaviour unchanged.
    *
    * Rolls back the caller's vote row on refusal, for the same reason the
    * addGuarantor failure path does: the row had to be written first to win
@@ -319,8 +333,8 @@ export class LoansService {
     } catch (error) {
       await rollback();
       throw new BadRequestException(
-        `Could not read director ${directorClientId}'s savings to confirm ` +
-          'guarantor capacity, so the guarantee was not recorded' +
+        `Could not read director ${directorClientId}'s contributions to ` +
+          'confirm guarantor capacity, so the guarantee was not recorded' +
           describeFineractError(error),
       );
     }
@@ -329,9 +343,9 @@ export class LoansService {
       await rollback();
       throw new BadRequestException(
         `Director ${directorClientId} cannot guarantee this loan: their ` +
-          `savings (${balance ?? 0}) do not cover the principal ` +
-          `(${principal}). A director with sufficient savings must approve ` +
-          'first — they become the guarantor.',
+          `contributions (${balance ?? 0}) do not cover the principal ` +
+          `(${principal}). A director with enough contributions must approve ` +
+          'first — the first approver becomes the guarantor.',
       );
     }
   }
