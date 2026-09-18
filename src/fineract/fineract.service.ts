@@ -764,6 +764,82 @@ export class FineractService {
     return accountId;
   }
 
+  /**
+   * A member's active loans with what is still owed on each.
+   *
+   * Richer than getActiveLoanIds because recording a repayment needs the
+   * operator to SEE the balance before typing an amount — the easiest way to
+   * mispost is against the wrong loan, and a bare id gives nothing to
+   * recognise.
+   */
+  async getActiveLoans(
+    clientId: number,
+  ): Promise<{ id: number; accountNo: string | null; balance: number }[]> {
+    const accounts = await this.getClientAccounts(clientId);
+    if (!accounts?.loanAccounts?.length) return [];
+
+    return accounts.loanAccounts
+      .filter((loan) => loan.status?.active !== false)
+      .map((loan) => ({
+        id: loan.id,
+        accountNo: loan.accountNo ?? null,
+        balance: Number(loan.loanBalance ?? 0),
+      }));
+  }
+
+  /**
+   * Posts a repayment against a loan. Money actually moves.
+   *
+   * `paymentTypeId` is mandatory — Fineract rejects the call without it, the
+   * same surprise savings deposits produced. This shape was verified by hand
+   * against the live instance on 2026-09-02, before any of it was coded.
+   *
+   * Fineract decides the ALLOCATION, not us: which installment and which
+   * component (penalty, fee, interest, principal) the money lands on is
+   * governed by the loan's transaction processing strategy. Reimplementing
+   * that here would be inventing a second opinion about what a member owes.
+   */
+  async repayLoan(params: {
+    loanId: number;
+    amount: number;
+    paymentTypeId: number;
+    date?: Date;
+    note?: string;
+  }): Promise<number> {
+    const response = await this.post<{ resourceId: number }>(
+      `/loans/${params.loanId}/transactions?command=repayment`,
+      {
+        transactionAmount: params.amount,
+        paymentTypeId: params.paymentTypeId,
+        transactionDate: FineractService.formatFineractDate(
+          params.date ?? new Date(),
+        ),
+        ...(params.note ? { note: params.note } : {}),
+        locale: 'en',
+        dateFormat: 'dd MMMM yyyy',
+      },
+    );
+
+    return response.resourceId;
+  }
+
+  /**
+   * Reverses a loan repayment recorded in error.
+   *
+   * Built at the same time as repayLoan deliberately: a payment path with no
+   * correction path is worse than none, because the first mistyped amount
+   * becomes permanent. Same `command=undo` shape as the savings undo below.
+   */
+  async undoLoanRepayment(params: {
+    loanId: number;
+    transactionId: number;
+  }): Promise<void> {
+    await this.post(
+      `/loans/${params.loanId}/transactions/${params.transactionId}?command=undo`,
+      {},
+    );
+  }
+
   /** Reverses a savings transaction — the correction path for a mistyped
    * deposit. */
   async undoSavingsTransaction(params: {

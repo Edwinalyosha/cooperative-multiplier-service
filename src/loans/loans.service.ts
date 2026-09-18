@@ -289,6 +289,76 @@ export class LoansService {
   }
 
   /**
+   * A member's active loans and what is still owed on each.
+   *
+   * Exists so the operator can SEE the loan before typing an amount against
+   * it. Posting to the wrong loan is the easiest mistake here and the one
+   * Fineract cannot help with afterwards — the ledger is append-only, so the
+   * correction is an undo plus a re-post, never an edit.
+   */
+  async listActiveLoans(clientId: number) {
+    return this.fineract.getActiveLoans(clientId);
+  }
+
+  /**
+   * Records money handed over against a loan.
+   *
+   * Named `recordLoanRepayment` to sit beside the older `recordRepayment`,
+   * which records a multiplier EVENT and moves no money at all. Two very
+   * different operations that were one word apart.
+   *
+   * Deliberately does NOT record a multiplier event. Timeliness is read from
+   * Fineract's schedule by the repayment sweep, which is the whole point of
+   * MLTD-P009: an `onTime` flag supplied by whoever takes the cash verified
+   * nothing, and a member could repay months late at no cost. Money here,
+   * verdict there.
+   *
+   * Nor does it touch the eligibility cache. Borrowing headroom subtracts the
+   * outstanding balance read LIVE from Fineract, so a repayment shows up in
+   * the member's available-to-borrow figure immediately without one.
+   */
+  async recordLoanRepayment(
+    loanId: number,
+    dto: {
+      amount: number;
+      paymentTypeId: number;
+      date?: string;
+      note?: string;
+    },
+  ): Promise<{ transactionId: number; loanId: number; amount: number }> {
+    const transactionId = await this.fineract.repayLoan({
+      loanId,
+      amount: dto.amount,
+      paymentTypeId: dto.paymentTypeId,
+      date: dto.date ? new Date(dto.date) : undefined,
+      note: dto.note,
+    });
+
+    this.logger.log(
+      `Recorded a ${dto.amount} repayment on loan ${loanId} ` +
+        `(Fineract transaction ${transactionId}).`,
+    );
+
+    return { transactionId, loanId, amount: dto.amount };
+  }
+
+  /**
+   * Reverses a repayment recorded in error.
+   *
+   * Built alongside recordRepayment rather than after it: a mistyped amount
+   * is inevitable, and a payment path whose first error is permanent is worse
+   * than no payment path. Logged at WARN because someone should be able to
+   * find out that money was un-recorded, and by whom.
+   */
+  async undoRepayment(loanId: number, transactionId: number): Promise<void> {
+    await this.fineract.undoLoanRepayment({ loanId, transactionId });
+
+    this.logger.warn(
+      `Reversed repayment transaction ${transactionId} on loan ${loanId}.`,
+    );
+  }
+
+  /**
    * Phase 3 — director quorum vote on a pending application. The
    * applicant cannot vote on their own request; rejections are logged but
    * never block or count toward the 2-approval threshold ("first 2

@@ -3,6 +3,7 @@ import {
   Body,
   Controller,
   Get,
+  HttpCode,
   Param,
   ParseIntPipe,
   Post,
@@ -14,6 +15,7 @@ import { ApiBearerAuth, ApiOperation, ApiQuery, ApiTags } from '@nestjs/swagger'
 import { UserRole } from '@prisma/client';
 import { LoansService } from './loans.service';
 import { RecordRepaymentDto } from './dto/record-repayment.dto';
+import { RecordLoanRepaymentDto } from './dto/record-loan-repayment.dto';
 import { ApplyLoanDto } from './dto/apply-loan.dto';
 import { DirectorDecisionDto } from './dto/director-decision.dto';
 import { FinanceDecisionDto } from './dto/finance-decision.dto';
@@ -218,6 +220,55 @@ export class LoansController {
     @Query('async') async?: boolean,
   ) {
     return this.loansService.recordRepayment(dto, async);
+  }
+
+  @Get('accounts/:clientId')
+  @UseGuards(MobileJwtGuard, RolesGuard)
+  @Roles(UserRole.FINANCE_MANAGER)
+  @ApiBearerAuth()
+  @ApiOperation({
+    summary:
+      "A member's active loans and what is still owed on each. Shown before " +
+      'an amount is typed: posting to the wrong loan is the easiest mistake ' +
+      'here, and Fineract cannot edit it away afterwards.',
+  })
+  activeLoans(@Param('clientId', ParseIntPipe) clientId: number) {
+    return this.loansService.listActiveLoans(clientId);
+  }
+
+  @Post('accounts/:loanId/repayment')
+  @UseGuards(MobileJwtGuard, RolesGuard)
+  @Roles(UserRole.FINANCE_MANAGER)
+  @ApiBearerAuth()
+  @ApiOperation({
+    summary:
+      'Record money handed over against a loan. MOVES MONEY. Records no ' +
+      'multiplier event — timeliness is read from the Fineract schedule by ' +
+      'the repayment sweep, never asserted by whoever took the cash.',
+  })
+  recordLoanRepayment(
+    @Param('loanId', ParseIntPipe) loanId: number,
+    @Body() dto: RecordLoanRepaymentDto,
+  ) {
+    return this.loansService.recordLoanRepayment(loanId, dto);
+  }
+
+  @Post('accounts/:loanId/repayment/:transactionId/undo')
+  @UseGuards(MobileJwtGuard, RolesGuard)
+  @Roles(UserRole.FINANCE_MANAGER)
+  @ApiBearerAuth()
+  @HttpCode(200)
+  @ApiOperation({
+    summary:
+      'Reverse a repayment recorded in error. Exists because a mistyped ' +
+      'amount is inevitable and the ledger is append-only.',
+  })
+  async undoLoanRepayment(
+    @Param('loanId', ParseIntPipe) loanId: number,
+    @Param('transactionId', ParseIntPipe) transactionId: number,
+  ) {
+    await this.loansService.undoRepayment(loanId, transactionId);
+    return { ok: true };
   }
 
   /**
