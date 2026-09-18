@@ -1,6 +1,7 @@
 import { ContributionLedgerService } from './contribution-ledger.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { MultiplierService } from '../multiplier/multiplier.service';
+import { FineractService } from '../fineract/fineract.service';
 import { MultiplierEventType } from '../multiplier/multiplier-event.enum';
 import { MULTIPLIER_STEPS } from '../multiplier/multiplier-steps.constants';
 import type { ContributionPeriod } from './contribution-period.util';
@@ -166,7 +167,13 @@ describe('contribution ledger', () => {
       reversePenalty: jest.fn(async () => undefined),
     } as unknown as MultiplierService;
 
-    return new ContributionLedgerService(prisma, multiplier);
+    // Names come from Fineract and matter only to the collection sheet;
+    // these tests are about the ledger's verdicts.
+    const fineract = {
+      getClient: jest.fn(async () => null),
+    } as unknown as FineractService;
+
+    return new ContributionLedgerService(prisma, multiplier, fineract);
   }
 
   const count = (type: MultiplierEventType) =>

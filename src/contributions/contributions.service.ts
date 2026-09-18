@@ -6,6 +6,7 @@ import { MultiplierEventType } from '../multiplier/multiplier-event.enum';
 import { RecordContributionDto } from './dto/record-contribution.dto';
 import { RecordDepositDto } from './dto/record-deposit.dto';
 import { PrismaService } from '../prisma/prisma.service';
+import { shortMemberName } from './member-name.util';
 import { ConfigService } from '@nestjs/config';
 
 @Injectable()
@@ -210,10 +211,15 @@ export class ContributionsService {
         // contributions account" and offered a Create button that could only
         // ever fail.
         let existsInFineract: boolean | 'unknown' = 'unknown';
+        // The client record is already being fetched to answer
+        // existsInFineract; its name was being thrown away. Keeping it lets
+        // every screen say "Mbarak M." instead of "#7", at no extra cost.
+        let displayName: string | null = null;
 
         try {
-          existsInFineract =
-            (await this.fineract.getClient(director.clientId)) != null;
+          const client = await this.fineract.getClient(director.clientId);
+          existsInFineract = client != null;
+          displayName = client?.displayName ?? null;
           if (existsInFineract) {
             contributionsAccountId =
               await this.fineract.getContributionsAccountId(director.clientId);
@@ -230,6 +236,8 @@ export class ContributionsService {
 
         return {
           clientId: director.clientId,
+          name: displayName,
+          shortName: shortMemberName(displayName),
           username: user?.username ?? null,
           role: user?.role ?? null,
           hasLogin: user != null,

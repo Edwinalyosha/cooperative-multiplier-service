@@ -1,6 +1,8 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { MultiplierService } from '../multiplier/multiplier.service';
+import { FineractService } from '../fineract/fineract.service';
+import { shortMemberName } from './member-name.util';
 import { MultiplierEventType } from '../multiplier/multiplier-event.enum';
 import { allocatePayment, totalArrears } from './contribution-allocation.util';
 import type { ContributionPeriod } from './contribution-period.util';
@@ -44,6 +46,7 @@ export class ContributionLedgerService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly multiplier: MultiplierService,
+    private readonly fineract: FineractService,
   ) {}
 
   /**
@@ -449,7 +452,13 @@ export class ContributionLedgerService {
    * top, which is the order a collection conversation actually happens in.
    */
   async collectionSheet(): Promise<
-    { clientId: number; arrearsTotal: number; arrearsWeeks: number }[]
+    {
+      clientId: number;
+      arrearsTotal: number;
+      arrearsWeeks: number;
+      name: string | null;
+      shortName: string | null;
+    }[]
   > {
     const rows = await this.prisma.contributionPeriod.findMany({
       where: { status: { in: [STATUS_OPEN, STATUS_ARREARS] } },
@@ -497,8 +506,41 @@ export class ContributionLedgerService {
       byClient.set(row.clientId, entry);
     }
 
-    return [...byClient.values()].sort(
+    const sheet = [...byClient.values()].sort(
       (a, b) => b.arrearsTotal - a.arrearsTotal || a.clientId - b.clientId,
+    );
+
+    return this.withMemberNames(sheet);
+  }
+
+  /**
+   * Attaches each member's name to a row keyed only by clientId.
+   *
+   * Names live in Fineract, so this is a read per member. Fetched in
+   * parallel, and a failure yields a NULL name rather than failing the whole
+   * sheet: the collection sheet's job is to say who owes what, and it must
+   * still do that when Fineract is unreachable. A screen that vanishes during
+   * an outage is worse than one showing "#7" instead of "Mbarak M.".
+   */
+  private async withMemberNames<T extends { clientId: number }>(
+    rows: T[],
+  ): Promise<(T & { name: string | null; shortName: string | null })[]> {
+    return Promise.all(
+      rows.map(async (row) => {
+        let displayName: string | null = null;
+        try {
+          displayName = (await this.fineract.getClient(row.clientId))
+            ?.displayName ?? null;
+        } catch {
+          /* Named below as null; the numbers are what this screen is for. */
+        }
+
+        return {
+          ...row,
+          name: displayName,
+          shortName: shortMemberName(displayName),
+        };
+      }),
     );
   }
 
