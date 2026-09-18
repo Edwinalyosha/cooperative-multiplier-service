@@ -101,6 +101,59 @@ const PROTECTED: [string, string][] = [
   // maps a caller-supplied username onto any unmapped member's clientId.
   // Must require a shared secret only n8n holds (Phase 2.1).
   ['post', '/webhooks/fineract/user/create'],
+
+  // ---------------------------------------------------------------------
+  // Added 2026-09-18. Everything below shipped between late August and
+  // mid-September WITHOUT a matrix entry, so the final test in this file
+  // had been failing on that account ever since -- a red suite nobody
+  // read, which is worth less than no suite at all.
+  //
+  // All are `@Roles(...)`-decorated and RolesGuard is an APP_GUARD, so they
+  // were enforced; what was missing was the PROOF. The premise of this file
+  // is that reading controllers cannot demonstrate the absence of a
+  // forgotten decorator. Thirty unproven routes in a system holding real
+  // money is precisely the gap it exists to close.
+  // ---------------------------------------------------------------------
+
+  // --- contributions: the weekly money path (finance manager) ---
+  ['get', '/contributions/payment-types'],
+  ['get', '/contributions/collection-sheet'],
+  ['get', '/contributions/member-setup'],
+  ['post', '/contributions/1/account'],
+  ['post', '/contributions/1/deposit'],
+  ['post', '/contributions/1/deposit/1/undo'],
+  ['post', '/contributions/1/opening-arrears'],
+  ['get', '/contributions/1/arrears'],
+  ['get', '/contributions/1/penalties'],
+  // Forgiving a penalty is the most discretionary act in the system -- the
+  // one thing that treats one member differently from another.
+  ['post', '/contributions/1/penalties/2026-08-24/waive'],
+
+  // --- loans: repayments and their waivers ---
+  ['get', '/loans/applications/stuck-disbursement'],
+  ['get', '/loans/repayments/1/penalties'],
+  ['post', '/loans/repayments/penalties/1/waive'],
+  ['get', '/loans/accounts/1'],
+  ['post', '/loans/accounts/1/repayment'],
+  ['post', '/loans/accounts/1/repayment/1/undo'],
+
+  // --- member-facing contribution reads (ownership-checked) ---
+  ['get', '/mobile/v1/contributions/1/this-week'],
+  ['get', '/mobile/v1/contributions/1/payments'],
+  ['get', '/mobile/v1/contributions/1/arrears'],
+  ['get', '/mobile/v1/ownership/1'],
+
+  // --- treasury / the books: moves money and rewrites the ledger ---
+  ['get', '/treasury/movements'],
+  ['get', '/treasury/entries'],
+  ['get', '/treasury/balances'],
+  ['post', '/treasury/record'],
+  ['post', '/treasury/entries/1/reverse'],
+
+  // --- manual sweep triggers: each one moves real multipliers ---
+  ['post', '/sweeps/contributions'],
+  ['post', '/sweeps/repayments'],
+  ['post', '/sweeps/savings-holds'],
 ];
 
 /** Deliberately reachable without a bearer token. */
